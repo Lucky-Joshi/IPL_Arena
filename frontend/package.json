@@ -1,8 +1,8 @@
 {
-  "name": "ipl-auction-arena-frontend",
+  "name": "t20-dynasty-frontend",
   "version": "1.0.0",
   "private": true,
-  "description": "Broadcast-style IPL Auction Arena frontend",
+  "description": "Premium T20 franchise auction simulator frontend",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

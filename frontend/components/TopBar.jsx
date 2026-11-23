@@ -8,7 +8,7 @@ import { useNarrationControls } from '../lib/narration';
 
 const LINKS = [
   { href: '/', label: 'Setup' },
-  { href: '/auction', label: 'Live Room' },
+  { href: '/auction', label: 'Auction Hall' },
   { href: '/results', label: 'Results' },
 ];
 
@@ -40,11 +40,11 @@ export default function TopBar() {
   return (
     <header className="top-bar">
       <div className="top-bar-inner">
-        <Link className="brand" href="/" aria-label="IPL Auction Arena home">
-          <span className="brand-mark">IPL</span>
+        <Link className="brand" href="/" aria-label="T20 Dynasty home">
+          <span className="brand-mark">T20</span>
           <span className="brand-text">
-            <strong>AUCTION ARENA</strong>
-            <small>Franchise control room</small>
+            <strong>DYNASTY</strong>
+            <small>Dynasty auction hall</small>
           </span>
         </Link>
 
@@ -71,7 +71,7 @@ export default function TopBar() {
               className={`mini-toggle ${narration.enabled ? 'is-on' : ''}`}
               onClick={narration.toggleEnabled}
               aria-pressed={narration.enabled}
-              title="Turn auctioneer narration on or off"
+              title="Turn lead auctioneer narration on or off"
             >
               {narration.enabled ? 'VOICE ON' : 'VOICE OFF'}
             </button>
@@ -80,7 +80,7 @@ export default function TopBar() {
               className={`mini-toggle ${narration.muted ? 'is-muted' : ''}`}
               onClick={narration.toggleMuted}
               aria-pressed={narration.muted}
-              title="Mute or unmute auctioneer narration"
+              title="Mute or unmute lead auctioneer narration"
               disabled={!narration.enabled}
             >
               {narration.muted ? 'MUTED' : 'UNMUTED'}

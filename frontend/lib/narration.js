@@ -10,7 +10,7 @@ import {
   useState,
 } from 'react';
 
-const STORAGE_KEY = 'ipl-auction-arena:narration';
+const STORAGE_KEY = 't20-dynasty:narration';
 const NarrationContext = createContext(null);
 
 function canSpeak() {

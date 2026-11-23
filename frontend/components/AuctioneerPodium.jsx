@@ -21,7 +21,7 @@ export default function AuctioneerPodium({ state, player }) {
   const hammerDown = state.phase === 'SOLD';
 
   return (
-    <section className="podium" aria-label="Auctioneer podium">
+    <section className="podium" aria-label="Lead auctioneer podium">
       <div className="podium-topline">
         <span className={`on-air ${state.clockRunning ? '' : 'is-paused'}`}>
           <span className="on-air-dot" /> {state.clockRunning ? 'ON AIR' : 'CLOCK PAUSED'}
@@ -85,8 +85,8 @@ export default function AuctioneerPodium({ state, player }) {
 
       <div className="podium-commentary" aria-live="polite">
         <div>
-          <span className="eyebrow">AUCTIONEER COMMENTARY</span>
-          <p>{state.announcement?.text || 'The auctioneer is preparing the next lot.'}</p>
+          <span className="eyebrow">LEAD AUCTIONEER COMMENTARY</span>
+          <p>{state.announcement?.text || 'The lead auctioneer is preparing the next lot.'}</p>
         </div>
         <div className="podium-voice">
           <span className="eyebrow">VOICE FEED</span>

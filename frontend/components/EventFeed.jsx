@@ -18,7 +18,7 @@ export default function EventFeed({ state }) {
         <span className="panel-tag live-tag">CHRONOLOGICAL</span>
       </div>
       <div className="event-list">
-        {events.length === 0 && <p className="feed-empty">The auctioneer is setting up the room…</p>}
+        {events.length === 0 && <p className="feed-empty">The lead auctioneer is setting up the hall…</p>}
         {events.map((event) => {
           const style = eventStyle(event.type);
           return (

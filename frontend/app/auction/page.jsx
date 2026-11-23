@@ -13,7 +13,7 @@ import { useAuctioneerVoice } from '../../lib/narration';
 
 const POLL_MS = 800;
 const TABS = [
-  { id: 'room', label: 'Auction Room' },
+  { id: 'room', label: 'Auction Hall' },
   { id: 'war', label: 'My War Room' },
   { id: 'squads', label: 'Squads' },
   { id: 'proceedings', label: 'Proceedings' },
@@ -132,7 +132,7 @@ export default function AuctionPage() {
     return (
       <div className="screen-state">
         <div className="loader" />
-        <h1>Connecting to the auction room…</h1>
+        <h1>Connecting to the Dynasty Auction Hall…</h1>
         <p>Opening a live channel to the auction engine.</p>
       </div>
     );

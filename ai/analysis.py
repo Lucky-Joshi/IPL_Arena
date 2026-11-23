@@ -1,4 +1,4 @@
-"""Squad, purse and player-pool analysis for the IPL Auction Arena AI.
+"""Squad, purse and player-pool analysis for the T20 Dynasty AI.
 
 Everything in this module is a pure function of the request context: no global
 state, no randomness, no clock.  The numbers produced here feed the private
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 ROLES = ("BATTER", "BOWLER", "ALLROUNDER", "WICKETKEEPER")
 
-# Approximate composition of a balanced completed IPL squad.
+# Approximate composition of a balanced completed franchise squad.
 ROLE_TARGET_SHARE = {
     "BATTER": 0.28,
     "BOWLER": 0.38,

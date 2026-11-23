@@ -1,4 +1,4 @@
-# IPL Auction Arena — AI decision service
+# T20 Dynasty — AI decision service
 
 Python 3.14, **standard library only** (no pip installs). Stateless, deterministic, port **5000**.
 
@@ -16,7 +16,7 @@ Optional: `set AI_PORT=5001` overrides the port. The server binds `0.0.0.0`.
 
 | Method | Path | Response |
 |---|---|---|
-| `GET` | `/health` | `{"ok":true,"version":1,"service":"ipl-auction-ai"}` |
+| `GET` | `/health` | `{"ok":true,"version":1,"service":"t20-dynasty-ai"}` |
 | `POST` | `/decide` | `{"action":"BID"\|"PASS"\|"WITHDRAW","amount":number\|null,"confidence":0..1,"publicComment":"...","privateReason":"..."}` |
 | `OPTIONS` | any | `204` with `Access-Control-Allow-Origin: *` |
 

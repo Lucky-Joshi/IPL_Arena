@@ -1,4 +1,4 @@
-"""Stateless AI decision service for IPL Auction Arena (stdlib only).
+"""Stateless AI decision service for T20 Dynasty (stdlib only).
 
 Run from the workspace root:
 
@@ -24,14 +24,14 @@ HOST = "0.0.0.0"
 PORT = 5000
 MAX_BODY_BYTES = 1024 * 1024
 
-HEALTH = {"ok": True, "version": 1, "service": "ipl-auction-ai"}
+HEALTH = {"ok": True, "version": 1, "service": "t20-dynasty-ai"}
 
 
 class AIHandler(BaseHTTPRequestHandler):
     """Small JSON-only HTTP handler with permissive CORS."""
 
     protocol_version = "HTTP/1.1"
-    server_version = "IPLAuctionAI/1"
+    server_version = "T20DynastyAI/1"
     sys_version = ""
 
     def log_message(self, format: str, *args: object) -> None:
@@ -149,7 +149,7 @@ def create_server(host: str = HOST, port: int = PORT) -> ThreadingHTTPServer:
 def main() -> None:
     port = int(os.environ.get("AI_PORT", str(PORT)))
     server = create_server(HOST, port)
-    sys.stderr.write(f"IPL Auction AI listening on {HOST}:{port}\n")
+    sys.stderr.write(f"T20 Dynasty AI listening on {HOST}:{port}\n")
     sys.stderr.flush()
     try:
         server.serve_forever(poll_interval=0.25)

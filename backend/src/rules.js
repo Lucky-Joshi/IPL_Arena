@@ -1,5 +1,5 @@
 /**
- * BCCI IPL Player Regulations 2025–2027 season registry.
+ * BCCI franchise player regulations 2025–2027 season registry.
  *
  * Every financial and squad limit in the simulator is derived from one of
  * these three seasons. The rest of the backend reads from here rather than
@@ -23,7 +23,7 @@ export const BASE_PRICE_TIERS = Object.freeze([2, 1.5, 1, 0.5, 0.3]);
 export const SEASONS = Object.freeze({
   2025: Object.freeze({
     key: '2025',
-    label: 'IPL 2025',
+    label: 'T20 Dynasty 2025',
     format: 'MEGA',
     startingPurse: 120,
     totalSalaryCap: 146,
@@ -46,7 +46,7 @@ export const SEASONS = Object.freeze({
   }),
   2026: Object.freeze({
     key: '2026',
-    label: 'IPL 2026',
+    label: 'T20 Dynasty 2026',
     format: 'MINI',
     startingPurse: 125,
     totalSalaryCap: 151,
@@ -69,7 +69,7 @@ export const SEASONS = Object.freeze({
   }),
   2027: Object.freeze({
     key: '2027',
-    label: 'IPL 2027',
+    label: 'T20 Dynasty 2027',
     format: 'MINI',
     startingPurse: 130,
     totalSalaryCap: 157,

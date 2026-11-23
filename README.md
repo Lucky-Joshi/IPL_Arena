@@ -1,7 +1,9 @@
-# IPL Auction Arena
+# T20 Dynasty
 
-A playable IPL auction simulator following the **BCCI IPL Player Regulations 2025–2027**. Ten franchises
-share one authoritative auction room: you control one of them, and nine autonomous AI management teams
+**Build Your Team. Command the Game.**
+
+A premium T20 franchise auction simulator following the **BCCI franchise player regulations 2025–2027**. Ten franchises
+share one authoritative auction hall: you control one of them, and nine autonomous AI management teams
 bid, retain, trade and rebuild against their own contracts, squads and strategies.
 
 ## Services
@@ -21,6 +23,15 @@ Private valuations never leave the AI service.
 The BCCI limits live in `backend/src/rules.js`, the single source of truth for the season cycle. Setup may
 tune only pacing (`tickMs`, `pace`) and a reserve-per-slot; all financial and squad limits come from the
 season registry. See [ARCHITECTURE.md](ARCHITECTURE.md) for exact schemas and contracts.
+
+## Brand and legal
+
+T20 Dynasty is an independent, fictional franchise-auction simulator. It uses no official league, team or
+player names, logos, portraits, tournament artwork or slogans. The auction mechanics model published BCCI
+franchise player regulations, but the product is not affiliated with or endorsed by any official body.
+
+Before commercial release, clear the **T20 Dynasty** name against IP India trademark records, check domain
+availability and app-store names, and have a trademark professional review the final identity.
 
 ## Run
 
@@ -84,7 +95,7 @@ each team and in the final review. Mega auctions have no overseas salary ceiling
   at once so capped slabs and RTM cards stay correct. Re-selection restores players and purses.
 - **BROADCAST** is the default: roughly five seconds per call so you can read the room. **CINEMATIC** is
   slower; **FAST** is for automated runs.
-- You can bid the moment a player is introduced — the auctioneer opens the floor and recognises the bid.
+- You can bid the moment a player is introduced — the lead auctioneer opens the floor and recognises the bid.
   The gold **BID ₹X Cr** button shows the next legal amount, with **B** as a shortcut; **W** withdraws from
   an active lot.
 - The same `validateBid` checks human and AI bids: purse, salary/squad/overseas caps, minimum-squad reserve,

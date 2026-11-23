@@ -275,8 +275,9 @@ export default function SetupScreen() {
     <div className="setup-screen">
       <section className="setup-hero">
         <div className="hero-copy">
-          <span className="eyebrow">TEN FRANCHISES · ONE AUCTION ROOM</span>
-          <h1>IPL Auction Arena</h1>
+          <span className="eyebrow">SPORTS MANAGEMENT SIMULATOR · TEN FRANCHISES · ONE HALL</span>
+          <h1>T20 Dynasty</h1>
+          <p className="hero-tagline">Build your squad. Manage your purse. Compete for glory.</p>
           <p>
             You run one franchise. Nine autonomous management teams evaluate every lot against
             their own squads, purses and strategies. Set the rules, take a seat on the floor,
@@ -313,7 +314,7 @@ export default function SetupScreen() {
             <span className="eyebrow">SAVED AUCTION FOUND</span>
             <h2>Pick up where you left off</h2>
             <p>
-              {saved.state.rules?.label || `IPL ${saved.state.season || '2025'}`} · {saved.state.difficulty} · {phaseLabel(saved.state.phase)} ·
+              {saved.state.rules?.label || `T20 Dynasty ${saved.state.season || '2025'}`} · {saved.state.difficulty} · {phaseLabel(saved.state.phase)} ·
               last saved {formatDateTime(saved.state.savedAt)}
             </p>
           </div>

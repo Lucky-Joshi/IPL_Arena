@@ -1,5 +1,5 @@
 /**
- * Ten fictional IPL Auction Arena franchises.
+ * Ten fictional T20 Dynasty franchises.
  *
  * Both formats start with empty squads. Retentions are chosen by the user
  * (and auto-picked for the nine AI teams) during SETUP from a shared pool.

@@ -1,5 +1,5 @@
 @echo off
-title IPL Auction Arena - Verification
+title T20 Dynasty - Verification
 cd /d "%~dp0"
 echo ============================================
 echo  1/3  Python AI engine unit tests

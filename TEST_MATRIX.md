@@ -1,6 +1,6 @@
 # Verification matrix
 
-Maps the BCCI IPL Player Regulations 2025–2027 and every required simulator scenario to an automated or
+Maps the BCCI franchise player regulations 2025–2027 and every required simulator scenario to an automated or
 manual check. `cmd /c verify.cmd` runs all three suites in order: Python AI unit tests, backend end-to-end
 smoke tests, Next.js production build.
 

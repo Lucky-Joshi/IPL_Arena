@@ -37,13 +37,13 @@ export const PHASE_LABELS = {
 export const RTM_PHASES = ['RTM_OFFER', 'RTM_COUNTER', 'RTM_MATCH'];
 
 /**
- * BCCI IPL Player Regulations 2025–2027. Mirrors backend/src/rules.js so the
+ * BCCI franchise player regulations 2025–2027. Mirrors backend/src/rules.js so the
  * setup screen can show the authoritative financial limits before CREATE.
  */
 export const SEASON_OPTIONS = [
   {
     key: '2025',
-    label: 'IPL 2025 · MEGA',
+    label: 'T20 Dynasty 2025 · MEGA',
     format: 'MEGA',
     startingPurse: 120,
     totalSalaryCap: 146,
@@ -61,7 +61,7 @@ export const SEASON_OPTIONS = [
   },
   {
     key: '2026',
-    label: 'IPL 2026 · MINI',
+    label: 'T20 Dynasty 2026 · MINI',
     format: 'MINI',
     startingPurse: 125,
     totalSalaryCap: 151,
@@ -79,7 +79,7 @@ export const SEASON_OPTIONS = [
   },
   {
     key: '2027',
-    label: 'IPL 2027 · MINI',
+    label: 'T20 Dynasty 2027 · MINI',
     format: 'MINI',
     startingPurse: 130,
     totalSalaryCap: 157,
@@ -228,7 +228,7 @@ export function phaseDwellTicks(state, phase = state?.phase) {
   return 0;
 }
 
-/** Approximate seconds left in the current auctioneer call. */
+/** Approximate seconds left in the current lead auctioneer call. */
 export function phaseSecondsRemaining(state) {
   const dwell = phaseDwellTicks(state);
   if (!dwell || !state?.clockRunning) return 0;
@@ -280,12 +280,12 @@ export function eventStyle(type) {
 }
 
 export function phaseStatus(state) {
-  if (!state) return 'Waiting for the auction room';
+  if (!state) return 'Waiting for the auction hall';
   switch (state.phase) {
     case 'SETUP':
       return 'Auction created — waiting for the start signal';
     case 'OPENING':
-      return 'The auctioneer is opening the proceedings';
+      return 'The lead auctioneer is opening the proceedings';
     case 'PLAYER_INTRODUCTION':
       return 'New lot on the podium — bidding opens shortly';
     case 'BIDDING':
@@ -335,7 +335,7 @@ export function cappedLabel(player) {
 }
 
 export function seasonLabel(state) {
-  return state?.rules?.label || state?.season || 'IPL 2025';
+  return state?.rules?.label || state?.season || 'T20 Dynasty 2025';
 }
 
 export function seasonOption(stateOrKey) {

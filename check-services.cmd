@@ -1,5 +1,5 @@
 @echo off
-title IPL Auction Arena - Service Check
+title T20 Dynasty - Service Check
 echo Checking AI engine (5000)...
 curl -s --max-time 3 http://localhost:5000/health
 echo.

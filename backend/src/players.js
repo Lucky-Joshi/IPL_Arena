@@ -1,5 +1,5 @@
 /**
- * Deterministic fictional player pool for IPL Auction Arena.
+ * Deterministic fictional player pool for T20 Dynasty.
  *
  * A single seed drives every random decision: categories, names, ratings,
  * prices and statistics. The default seed always produces the same 140

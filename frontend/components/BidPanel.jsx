@@ -49,7 +49,7 @@ export default function BidPanel({ state, player, onAction, busy }) {
     bidBlock = 'Right to Match is being resolved — bidding resumes after the decision.';
   } else if (!bidOpen) {
     bidBlock = state.phase === 'OPENING' || state.phase === 'FINAL_REVIEW'
-      ? 'Auctioneer is speaking — bids open with the next lot.'
+      ? 'Lead auctioneer is speaking — bids open with the next lot.'
       : 'Waiting for the next lot on the block.';
   } else if (withdrawn) bidBlock = 'You withdrew from this lot.';
   else if (leading) bidBlock = 'Your franchise is already leading.';
@@ -75,7 +75,7 @@ export default function BidPanel({ state, player, onAction, busy }) {
   const urgent = state.phase === 'GOING_TWICE' || (secondsLeft > 0 && secondsLeft <= 2);
   const bidPrompt = bidBlock
     || (state.phase === 'PLAYER_INTRODUCTION' || state.phase === 'ACCELERATED_AUCTION'
-      ? 'Bid now — the auctioneer will open the floor'
+      ? 'Bid now — the lead auctioneer will open the floor'
       : state.phase === 'BIDDING'
         ? 'Place the next legal bid'
         : `${phaseLabel(state.phase)} — raise your paddle`);

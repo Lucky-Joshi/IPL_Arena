@@ -1,6 +1,6 @@
-"""Standard-library test suite for the IPL Auction Arena AI service.
+"""Standard-library test suite for the T20 Dynasty AI service.
 
-The fixtures mirror the BCCI IPL Player Regulations 2025–2027: capped and
+The fixtures mirror the BCCI franchise player regulations 2025–2027: capped and
 uncapped player status, existing contract fees, Right to Match context and the
 ₹18 Cr overseas salary cap in Mini Auctions.
 
@@ -410,7 +410,7 @@ class HttpServerTests(unittest.TestCase):
         status, headers, body = self._request("/health")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), HEALTH)
-        self.assertEqual(json.loads(body), {"ok": True, "version": 1, "service": "ipl-auction-ai"})
+        self.assertEqual(json.loads(body), {"ok": True, "version": 1, "service": "t20-dynasty-ai"})
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "*")
 
     def test_decide_endpoint_over_http(self):

@@ -1,11 +1,11 @@
-# IPL Auction Arena — Cross-service contract (v1)
+# T20 Dynasty — Cross-service contract (v1)
 
 Three separated services. **Only the Node backend owns auction state.** The Python service is a stateless
 valuation/decision engine. The Next.js frontend is a read-and-command client.
 
 | Service | Dir | Port | Stack | Responsibility |
 |---|---|---|---|---|
-| Frontend | `frontend/` | 3000 | Next.js (JS/JSX) | Setup, auction room, war room, squads, results, voice narration |
+| Frontend | `frontend/` | 3000 | Next.js (JS/JSX) | Setup, auction hall, war room, squads, results, voice narration |
 | Backend | `backend/` | 4000 | Node 24, built-in `http` (zero deps) | Authoritative engine, validation, persistence, proceedings, season rules |
 | AI | `ai/` | 5000 | Python 3 stdlib `http.server` (zero deps) | Private valuations, per-franchise bid decisions, public commentary |
 
@@ -178,7 +178,7 @@ price, log, ticks }`.
 ## 3. Proceedings
 
 Proceedings are season-aware (`backend/src/proceedings.js`). The 2025 Mega includes opening ceremony,
-auctioneer welcome, franchise introductions, rules briefing, **two marquee sets**, role sets, strategy
+lead auctioneer welcome, franchise introductions, rules briefing, **two marquee sets**, role sets, strategy
 break, accelerated auction, final opportunities, unsold review, verification and closing ceremony. The 2026
 and 2027 Mini campaigns drop the marquee sets and use mini-specific announcements and rules copy.
 

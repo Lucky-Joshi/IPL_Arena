@@ -187,7 +187,7 @@ export function withdrawPlayer(state, { playerId, certifiedInjury = false } = {}
   owner.squad = (owner.squad || []).filter((id) => id !== playerId);
   return {
     ok: true,
-    message: `${player.name} withdrew without a certified injury — banned from the IPL and its auctions through ${bannedThrough}.`,
+    message: `${player.name} withdrew without a certified injury — banned from T20 Dynasty and its auctions through ${bannedThrough}.`,
   };
 }
 

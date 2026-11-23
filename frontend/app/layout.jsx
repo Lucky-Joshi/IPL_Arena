@@ -3,8 +3,8 @@ import TopBar from '../components/TopBar';
 import { NarrationProvider } from '../lib/narration';
 
 export const metadata = {
-  title: 'IPL Auction Arena',
-  description: 'A broadcast-style IPL franchise auction — ten teams, one room, every decision yours.',
+  title: 'T20 Dynasty — Build Your Team. Command the Game.',
+  description: 'A premium T20 franchise auction simulator — ten franchises, one hall, every decision yours.',
 };
 
 export default function RootLayout({ children }) {
@@ -16,7 +16,7 @@ export default function RootLayout({ children }) {
             <TopBar />
             <main className="app-main">{children}</main>
             <footer className="app-footer">
-              <span>IPL Auction Arena</span>
+              <span>T20 Dynasty</span>
               <span className="footer-sep">/</span>
               <span>Broadcast control room</span>
               <span className="footer-sep">/</span>

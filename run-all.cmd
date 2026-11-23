@@ -1,7 +1,7 @@
 @echo off
-title IPL Auction Arena - Launcher
+title T20 Dynasty - Launcher
 cd /d "%~dp0"
-echo Launching IPL Auction Arena services...
+echo Launching T20 Dynasty services...
 start "" "%~dp0run-ai.cmd"
 start "" "%~dp0run-backend.cmd"
 start "" "%~dp0run-frontend.cmd"

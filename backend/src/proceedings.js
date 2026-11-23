@@ -15,7 +15,7 @@ import { resolveSeason } from './rules.js';
 
 export const STAGE_TITLES = {
   'opening-ceremony': 'Opening Ceremony',
-  'auctioneer-welcome': 'Auctioneer Welcome',
+  'auctioneer-welcome': 'Lead Auctioneer Welcome',
   'franchise-introductions': 'Franchise Introductions',
   'rules-briefing': 'Rules Briefing',
   'marquee-set-1': 'Marquee Set 1 · Capped Headliners',
