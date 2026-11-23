@@ -1,47 +1,61 @@
 /**
- * Retention rules shared by the engine, validator and results.
+ * BCCI 2025–27 retention rules.
  *
- * Retentions are chosen during SETUP from the live player pool. Each retained
- * player is removed from the auction and costs a fixed slab based on rating;
- * that cost is deducted from the franchise purse immediately.
+ * MEGA: at most six players, of whom at most five are capped and at most two
+ * are uncapped. Capped retentions cost ₹18/14/11/18/14 Cr in selection order;
+ * uncapped retentions cost ₹4 Cr each. Every retention not used leaves an RTM
+ * card behind (up to 6 − direct retentions).
+ *
+ * MINI: no retention cap and no RTM. A retained player keeps their existing
+ * contract fee; releasing them returns that salary to the purse.
  */
 
-export const RETENTION_SLABS = Object.freeze([
-  { min: 90, cost: 5 },
-  { min: 85, cost: 4 },
-  { min: 80, cost: 3 },
-  { min: 75, cost: 2 },
-  { min: 70, cost: 1.5 },
-  { min: -Infinity, cost: 1 },
-]);
+import {
+  CAPPED_RETENTION_SLABS,
+  MAX_RETENTIONS,
+  UNCAPPED_RETENTION_COST,
+  isMega,
+  rulesFor,
+} from './rules.js';
 
-export const RETENTION_LIMITS = Object.freeze({ MEGA: 3, MINI: 15 });
-
-/** Rating slab cost in ₹ Cr. */
-export function retentionCost(player) {
-  const rating = Number(player?.rating);
-  const slab = RETENTION_SLABS.find((entry) => Number.isFinite(rating) && rating >= entry.min);
-  return slab ? slab.cost : 1;
-}
+export const RETENTION_SLABS = Object.freeze(CAPPED_RETENTION_SLABS);
+export const RETENTION_LIMITS = Object.freeze({ MEGA: MAX_RETENTIONS, MINI: 25 });
+export const UNCAPPED_RETENTION_COST_CRS = UNCAPPED_RETENTION_COST;
 
 function fail(error) {
   return { ok: false, error };
-}
-
-function isOverseas(player) {
-  return Boolean(player && player.nationality && player.nationality !== 'India');
 }
 
 function numberOr(value, fallback) {
   return Number.isFinite(Number(value)) ? Number(value) : fallback;
 }
 
+export function isOverseas(player) {
+  return Boolean(player && player.nationality && player.nationality !== 'India');
+}
+
+export function isUncapped(player) {
+  return player?.capped === false || player?.capped === undefined
+    ? true
+    : false;
+}
+
+/** Cost of one retention in ₹ Cr, given its order among capped/uncapped picks. */
+export function retentionCost(player, options = {}) {
+  const opts = typeof options === 'string' ? { season: options } : options || {};
+  const season = opts.season || player?.season || (opts.state?.season) || (opts.state?.format === 'MINI' ? '2026' : '2025');
+  const rules = rulesFor(season, opts.format || opts.state?.format);
+  if (rules.format === 'MINI') return Math.round(numberOr(player?.contractFee, 0.3) * 100) / 100;
+  if (isUncapped(player)) return rules.uncappedRetentionCost;
+  const index = numberOr(opts.cappedIndex, 0);
+  return Number(rules.cappedRetentionSlabs[Math.min(Math.max(0, index), rules.cappedRetentionSlabs.length - 1)]);
+}
+
 /**
- * Validate a complete retention selection against the current SETUP state.
- * The caller must have reset existing retentions first so `purse` is the
- * starting purse and every candidate is AVAILABLE.
+ * Build and validate a complete retention plan for one franchise.
+ * The caller resets existing retentions first so every figure starts at CREATE.
  */
-export function validateRetentionSelection(state, franchiseId, playerIds) {
+export function buildRetentionPlan(state, franchiseId, playerIds) {
   if (!state || typeof state !== 'object') return fail('Auction state is unavailable');
   const franchise = (state.franchises || []).find((entry) => entry.id === franchiseId);
   if (!franchise) return fail(`Franchise ${franchiseId} was not found`);
@@ -50,88 +64,142 @@ export function validateRetentionSelection(state, franchiseId, playerIds) {
   const unique = [...new Set(playerIds.map((id) => String(id)))];
   if (unique.length !== playerIds.length) return fail('A player cannot be retained twice');
 
-  const max = Math.max(0, Math.floor(numberOr(state.config?.maxRetentions, RETENTION_LIMITS[state.format] || 3)));
-  if (unique.length > max) {
-    return fail(`${state.format} allows at most ${max} retention${max === 1 ? '' : 's'}`);
-  }
+  const rules = rulesFor(state.season, state.format);
+  const mega = rules.format === 'MEGA';
+  const max = mega ? rules.maxRetentions : Math.min(numberOr(state.config?.maxSquad, 25), 25);
+  if (unique.length > max) return fail(`${rules.label} allows at most ${max} retentions`);
 
-  const maxSquad = numberOr(state.config?.maxSquad, 25);
-  const maxOverseas = numberOr(state.config?.maxOverseas, 8);
-  const minSquad = numberOr(state.config?.minSquad, 18);
+  const maxSquad = numberOr(state.config?.maxSquad, rules.maxSquad);
+  const maxOverseas = numberOr(state.config?.maxOverseas, rules.maxOverseas);
   const reservePerSlot = numberOr(state.config?.minReservePerSlot, 0);
   const ownerByPlayer = new Map();
   for (const team of state.franchises || []) {
     for (const id of team.squad || []) ownerByPlayer.set(id, team.id);
   }
 
+  const entries = [];
   let total = 0;
   let overseas = 0;
+  let cappedCount = 0;
+  let uncappedCount = 0;
   for (const id of unique) {
     const player = (state.players || []).find((candidate) => candidate.id === id);
     if (!player) return fail(`Retained player ${id} was not found`);
     if (player.availability !== 'AVAILABLE') return fail(`${player.name} is no longer in the auction pool`);
-    if (state.format === 'MINI' && !player.retentionCandidate) {
-      return fail(`${player.name} is not an existing-squad retention candidate`);
+    if (!player.retentionCandidate) return fail(`${player.name} was not on a previous-season contract`);
+    if (player.previousFranchiseId && player.previousFranchiseId !== franchiseId) {
+      return fail(`${player.name} is contracted to another franchise`);
     }
     if (ownerByPlayer.has(id)) return fail(`${player.name} is already in another squad`);
+
+    const capped = !isUncapped(player);
+    if (capped) cappedCount += 1;
+    else uncappedCount += 1;
+    if (mega) {
+      if (cappedCount > rules.maxCappedRetentions) {
+        return fail(`A Mega auction allows at most ${rules.maxCappedRetentions} capped retentions`);
+      }
+      if (uncappedCount > rules.maxUncappedRetentions) {
+        return fail(`A Mega auction allows at most ${rules.maxUncappedRetentions} uncapped retentions`);
+      }
+    }
+    const cost = retentionCost(player, {
+      season: state.season,
+      cappedIndex: cappedCount - 1,
+      uncappedIndex: uncappedCount - 1,
+    });
     if (isOverseas(player)) overseas += 1;
-    total += retentionCost(player);
+    total += cost;
+    entries.push({
+      playerId: id,
+      cost,
+      capped,
+      name: player.name,
+      contractFee: numberOr(player.contractFee, 0),
+    });
   }
 
   if (overseas > maxOverseas) return fail(`Retentions would exceed the overseas limit of ${maxOverseas}`);
   if (unique.length > maxSquad) return fail(`Retentions would exceed the squad limit of ${maxSquad}`);
-
-  // An empty selection is always legal: reserve funds are a bidding rule for
-  // the main auction, not a reason to block a small-purse auction from starting.
   if (unique.length > 0) {
-    const requiredReserve = state.format === 'MINI' ? 0 : Math.max(0, minSquad - unique.length) * reservePerSlot;
-    if (numberOr(franchise.purse, 0) - total < requiredReserve - 0.000001) {
+    const reserve = mega ? Math.max(0, minSquadReserve(state, unique.length, reservePerSlot)) : 0;
+    if (numberOr(franchise.purse, 0) - total < reserve - 0.000001) {
       return fail(`Retention cost of ₹${total.toFixed(2)} Cr does not fit the purse`);
     }
   }
-  return { ok: true };
+
+  return {
+    ok: true,
+    entries,
+    total: Math.round(total * 100) / 100,
+    cappedCount,
+    uncappedCount,
+    rtmCards: mega ? rules.maxRetentions - entries.length : 0,
+  };
+}
+
+function minSquadReserve(state, retainedCount, reservePerSlot) {
+  const rules = rulesFor(state.season, state.format);
+  return Math.max(0, numberOr(state.config?.minSquad, rules.minSquad) - retainedCount) * reservePerSlot;
+}
+
+export function validateRetentionSelection(state, franchiseId, playerIds) {
+  return buildRetentionPlan(state, franchiseId, playerIds);
 }
 
 /** Apply a validated selection to one franchise. */
 export function applyRetentionSelection(state, franchiseId, playerIds) {
   const franchise = (state.franchises || []).find((entry) => entry.id === franchiseId);
   if (!franchise) return;
-  const unique = [...new Set(playerIds.map((id) => String(id)))];
+  const plan = buildRetentionPlan(state, franchiseId, playerIds);
+  if (!plan.ok) return;
   const config = state.config || {};
-  let total = 0;
+  const rules = rulesFor(state.season, state.format);
 
-  for (const id of unique) {
-    const player = (state.players || []).find((candidate) => candidate.id === id);
+  for (const entry of plan.entries) {
+    const player = (state.players || []).find((candidate) => candidate.id === entry.playerId);
     if (!player) continue;
-    const cost = retentionCost(player);
-    total += cost;
-    franchise.squad.push(id);
-    franchise.existing.push(id);
-    franchise.retentions.push({ playerId: id, cost, rating: Number(player.rating) || 0, name: player.name });
+    franchise.squad.push(player.id);
+    franchise.existing.push(player.id);
+    franchise.retentions.push({
+      playerId: player.id,
+      cost: entry.cost,
+      capped: entry.capped,
+      contractFee: entry.contractFee,
+      rating: Number(player.rating) || 0,
+      name: player.name,
+    });
     player.availability = 'SOLD';
     player.soldTo = franchise.id;
     player.soldPrice = 0;
     player.soldRound = null;
     player.existing = true;
     player.retained = true;
-    player.retentionCost = cost;
+    player.retentionCost = entry.cost;
+    // A retained player keeps their previous contract salary. In a Mini
+    // Auction every squad member counts towards the ₹18 Cr overseas salary
+    // ceiling, so retained overseas contracts must be included.
+    player.salary = entry.cost;
+    player.auctionRoundBought = rules.format;
+    // A retained contract is not a mini-auction signing and may be traded in
+    // the post-auction window; only fresh purchases carry this flag.
+    player.purchasedInMini = false;
+    if (isOverseas(player)) {
+      franchise.overseasSalarySpend = Math.round(((Number(franchise.overseasSalarySpend) || 0) + entry.cost) * 100) / 100;
+    }
   }
 
-  // AI picks are applied one at a time, so spend must accumulate rather than
-  // be replaced by the cost of the latest selection.
-  franchise.retentionSpent = Math.round((numberOr(franchise.retentionSpent, 0) + total) * 100) / 100;
-  franchise.purse = Math.round((numberOr(franchise.purse, 0) - total) * 100) / 100;
+  franchise.retentionSpent = Math.round((numberOr(franchise.retentionSpent, 0) + plan.total) * 100) / 100;
+  franchise.purse = Math.round((numberOr(franchise.purse, 0) - plan.total) * 100) / 100;
+  franchise.rtmCards = plan.rtmCards;
 
-  if (state.format === 'MINI') {
-    // Derive the cap from the squad as a whole — AI picks are applied one at a
-    // time, so `unique.length` alone would only describe the latest pick.
+  if (rules.format === 'MINI') {
     const retainedCount = (franchise.squad || []).length;
-    const base = numberOr(config.maxAdditions, 6);
-    const needed = Math.max(0, numberOr(config.minSquad, 18) - retainedCount);
-    const room = Math.max(0, numberOr(config.maxSquad, 25) - retainedCount);
-    franchise.additionsLimit = Math.min(room, Math.max(base, needed));
+    const room = Math.max(0, numberOr(config.maxSquad, rules.maxSquad) - retainedCount);
+    const needed = Math.max(0, numberOr(config.minSquad, rules.minSquad) - retainedCount);
+    franchise.additionsLimit = Math.min(room, Math.max(numberOr(config.maxAdditions, 6), needed));
   } else {
-    franchise.additionsLimit = numberOr(config.maxSquad, 25);
+    franchise.additionsLimit = numberOr(config.maxSquad, rules.maxSquad);
   }
 }
 
@@ -149,99 +217,97 @@ export function resetRetentions(state) {
     player.existing = false;
     player.retained = false;
     delete player.retentionCost;
+    delete player.salary;
+    delete player.auctionRoundBought;
+    delete player.purchasedInMini;
   }
-  // Legacy saves used `existing` without the `retained` flag. In SETUP those
-  // players are treated as unset retentions so the new picker owns the choice.
-  const legacyIds = new Set();
+  // Legacy saves used `existing` without the `retained` flag.
   if (state.phase === 'SETUP' && !state.retentionsConfirmed) {
     for (const player of state.players || []) {
-      if (player?.existing && !player.retained && Number(player.soldPrice) === 0) legacyIds.add(player.id);
-    }
-    for (const id of legacyIds) {
-      const player = (state.players || []).find((candidate) => candidate.id === id);
-      if (!player) continue;
-      player.availability = 'AVAILABLE';
-      player.soldTo = null;
-      player.soldPrice = 0;
-      player.soldRound = null;
-      player.existing = false;
-      delete player.retentionCost;
+      if (player?.existing && !player.retained && Number(player.soldPrice) === 0) {
+        retainedIds.add(player.id);
+        player.availability = 'AVAILABLE';
+        player.soldTo = null;
+        player.soldPrice = 0;
+        player.soldRound = null;
+        player.existing = false;
+      }
     }
   }
 
-  const removed = new Set([...retainedIds, ...legacyIds]);
   const startingPurse = numberOr(state.config?.startingPurse, 0);
+  const rules = rulesFor(state.season, state.format);
   for (const franchise of state.franchises) {
-    franchise.squad = (franchise.squad || []).filter((id) => !removed.has(id));
-    franchise.existing = (franchise.existing || []).filter((id) => !removed.has(id));
+    franchise.squad = (franchise.squad || []).filter((id) => !retainedIds.has(id));
+    franchise.existing = (franchise.existing || []).filter((id) => !retainedIds.has(id));
     franchise.retentions = [];
     franchise.retentionSpent = 0;
     franchise.purse = startingPurse;
-    franchise.additionsLimit = state.format === 'MINI'
+    franchise.rtmCards = rules.rtmAvailable ? rules.maxRetentions : 0;
+    franchise.rtmUsed = 0;
+    franchise.overseasSalarySpend = 0;
+    franchise.additionsLimit = rules.format === 'MINI'
       ? numberOr(state.config?.maxAdditions, 6)
-      : numberOr(state.config?.maxSquad, 25);
+      : numberOr(state.config?.maxSquad, rules.maxSquad);
   }
   state.retentionsConfirmed = false;
 }
 
 /**
- * Deterministic retention picker for the nine AI franchises. Selection is
- * round-robin so each team gets a turn at the strongest remaining players.
+ * Deterministic retention picker for the nine AI franchises. Each team can
+ * only retain players from its own previous-season contract list.
  */
 export function autoRetainAi(state) {
   if (!state || !Array.isArray(state.franchises)) return;
-  const limit = Math.max(0, Math.floor(numberOr(state.config?.maxRetentions, RETENTION_LIMITS[state.format] || 3)));
+  const rules = rulesFor(state.season, state.format);
   const teams = state.franchises.filter((franchise) => franchise.id !== state.userFranchiseId);
-  if (!teams.length || limit === 0) return;
+  if (!teams.length) return;
 
-  for (let round = 0; round < limit; round += 1) {
-    for (const franchise of teams) {
-      const currentCount = (franchise.retentions || []).length;
-      if (currentCount >= limit) continue;
-      const constitution = validateRetentionSelection(state, franchise.id, []);
-      if (!constitution.ok) continue;
-
-      const owned = new Set();
-      for (const team of state.franchises) for (const id of team.squad || []) owned.add(id);
-      const overseasCount = (franchise.squad || []).filter((id) => {
-        const player = (state.players || []).find((candidate) => candidate.id === id);
-        return isOverseas(player);
-      }).length;
-      const targets = Array.isArray(franchise.targets) ? franchise.targets : [];
-      const roleCounts = { BATTER: 0, BOWLER: 0, ALLROUNDER: 0, WICKETKEEPER: 0 };
-      for (const id of franchise.squad || []) {
-        const player = (state.players || []).find((candidate) => candidate.id === id);
-        if (player && roleCounts[player.role] !== undefined) roleCounts[player.role] += 1;
-      }
-
-      let best = null;
-      for (const player of state.players || []) {
-        if (player.availability !== 'AVAILABLE' || owned.has(player.id)) continue;
-        if (state.format === 'MINI' && !player.retentionCandidate) continue;
-        const overseas = isOverseas(player) ? 1 : 0;
-        if (overseasCount + overseas > numberOr(state.config?.maxOverseas, 8)) continue;
-        const cost = retentionCost(player);
-        const remainingSlots = Math.max(0, numberOr(state.config?.minSquad, 18) - currentCount - 1);
-        const reserve = state.format === 'MINI' ? 0 : remainingSlots * numberOr(state.config?.minReservePerSlot, 0);
-        if (numberOr(franchise.purse, 0) - cost < reserve - 0.000001) continue;
-
-        const roleBonus = targets.includes(player.role) ? 2 : 0;
-        const needBonus = Math.max(0, 2 - (roleCounts[player.role] || 0)) * 0.6;
-        const valueBonus = (Number(player.rating) || 0) / Math.max(1, cost);
-        const strategyBonus = franchise.strategy === 'AGGRESSIVE' ? (Number(player.rating) || 0) >= 85 ? 1 : 0
-          : franchise.strategy === 'CONSERVATIVE' ? (Number(player.rating) || 0) >= 90 ? 1.5 : cost <= 2 ? 1 : 0
-            : 0;
-        const score = (Number(player.rating) || 0) + roleBonus + needBonus + valueBonus + strategyBonus;
-        if (!best || score > best.score || (score === best.score && String(player.id).localeCompare(String(best.player.id)) < 0)) {
-          best = { player, score, cost };
-        }
-      }
-      if (!best) continue;
-      const check = validateRetentionSelection(state, franchise.id, [best.player.id]);
-      if (!check.ok) continue;
-      applyRetentionSelection(state, franchise.id, [best.player.id]);
+  teams.forEach((franchise, teamIndex) => {
+    const ownedFor = (cappedWanted) => (state.players || []).filter((player) => {
+      if (!player.retentionCandidate || player.previousFranchiseId !== franchise.id) return false;
+      if (player.availability !== 'AVAILABLE') return false;
+      return cappedWanted === null ? true : !isUncapped(player) === cappedWanted;
+    });
+    let plan = [];
+    if (rules.format === 'MEGA') {
+      const uncappedTarget = Math.min(rules.maxUncappedRetentions, 1 + (teamIndex % 2));
+      const cappedTarget = Math.min(
+        rules.maxCappedRetentions,
+        rules.maxRetentions - uncappedTarget,
+        3 + (teamIndex % 3)
+      );
+      plan.push(...pickBest(ownedFor(true), cappedTarget, franchise));
+      plan.push(...pickBest(ownedFor(false), uncappedTarget, franchise));
+    } else {
+      const target = Math.min((franchise.previousSquad || []).length, 15 + (teamIndex % 3));
+      plan.push(...pickBest(ownedFor(null), target, franchise));
     }
-  }
+    // Apply the whole selection at once: capped slabs and the RTM card count
+    // both depend on the complete ordered list, not on each player in isolation.
+    plan = plan.slice(0, rules.maxRetentions);
+    const check = buildRetentionPlan(state, franchise.id, plan);
+    if (check.ok) applyRetentionSelection(state, franchise.id, plan);
+  });
+}
+
+function pickBest(candidates, count, franchise) {
+  if (count <= 0) return [];
+  const targets = Array.isArray(franchise.targets) ? franchise.targets : [];
+  return candidates
+    .map((player) => ({
+      player,
+      score: ratingOf(player)
+        + (targets.includes(player.role) ? 2 : 0)
+        + (franchise.strategy === 'AGGRESSIVE' && ratingOf(player) >= 85 ? 1 : 0),
+    }))
+    .sort((a, b) => b.score - a.score || String(a.player.id).localeCompare(String(b.player.id)))
+    .slice(0, count)
+    .map((entry) => entry.player.id);
+}
+
+function ratingOf(player) {
+  return Number(player?.rating) || 0;
 }
 
 export default retentionCost;

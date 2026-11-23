@@ -8,9 +8,9 @@
 import { randomUUID } from 'node:crypto';
 
 import { generatePlayers } from './players.js';
-import { createFranchises, FRANCHISE_CONFIG_DEFAULTS } from './franchises.js';
+import { createFranchises, FRANCHISE_CONFIG_DEFAULTS, configForSeason } from './franchises.js';
 import { createProceedings } from './proceedings.js';
-import { getNextBid, validateBid } from './validation.js';
+import { getNextBid, validateBid, canFranchiseHoldPlayer as validateHold } from './validation.js';
 import { computeResults } from './results.js';
 import {
   RETENTION_LIMITS,
@@ -20,10 +20,26 @@ import {
   resetRetentions,
   autoRetainAi,
 } from './retention.js';
+import {
+  SEASONS,
+  rulesFor,
+  resolveSeason,
+  isMega,
+  salarySplit,
+  matchFeeProjection,
+} from './rules.js';
+import {
+  proposeTrade,
+  respondTrade,
+  injurePlayer,
+  signInjuryReplacement,
+  withdrawPlayer,
+} from './season-ops.js';
 
 export { getNextBid, validateBid, computeResults };
 export { canFranchiseHoldPlayer } from './validation.js';
 export { retentionCost, RETENTION_LIMITS };
+export { SEASONS, rulesFor, salarySplit, matchFeeProjection };
 
 // discussion.js is written by a separate agent. A missing hook must never
 // take the auction down, so the import is optional at module load time.
@@ -35,6 +51,7 @@ try {
 }
 
 const OPEN_PHASES = new Set(['BIDDING', 'GOING_ONCE', 'GOING_TWICE']);
+const RTM_PHASES = new Set(['RTM_OFFER', 'RTM_COUNTER', 'RTM_MATCH']);
 const TERMINAL_PHASES = new Set(['SETUP', 'COMPLETED', 'FINAL_REVIEW', 'STRATEGY_BREAK', 'SET_BREAK']);
 const ROLES = ['BATTER', 'BOWLER', 'ALLROUNDER', 'WICKETKEEPER'];
 const EVENT_LIMIT = 1000;
@@ -79,24 +96,33 @@ function isOverseas(player) {
   return Boolean(player && player.nationality && player.nationality !== 'India');
 }
 
-function normaliseConfig(format, overrides = {}) {
-  const base = FRANCHISE_CONFIG_DEFAULTS[format] || FRANCHISE_CONFIG_DEFAULTS.MEGA;
+function normaliseConfig(format, overrides = {}, seasonKey) {
+  const season = resolveSeason(seasonKey, format);
+  const rules = SEASONS[season];
+  const base = { ...configForSeason(season), ...FRANCHISE_CONFIG_DEFAULTS[format] };
+  // Season financial rules are authoritative; user overrides can only tune
+  // the pacing and reserve behaviour, never the BCCI purse or salary cap.
   const out = { ...base };
   if (overrides && typeof overrides === 'object') {
-    for (const key of Object.keys(base)) {
+    for (const key of ['minReservePerSlot', 'tickMs', 'maxAdditions']) {
       const raw = overrides[key];
       if (raw !== undefined && raw !== null && Number.isFinite(Number(raw))) out[key] = Number(raw);
     }
   }
+  out.startingPurse = rules.startingPurse;
+  out.totalSalaryCap = rules.totalSalaryCap;
+  out.overseasSalaryCap = rules.overseasSalaryCap;
+  out.matchFee = rules.matchFee;
+  out.minSquad = rules.minSquad;
+  out.maxSquad = rules.maxSquad;
+  out.maxOverseas = rules.maxOverseas;
+  out.maxRetentions = rules.maxRetentions;
+  out.maxCappedRetentions = rules.maxCappedRetentions;
+  out.maxUncappedRetentions = rules.maxUncappedRetentions;
   out.minSquad = Math.max(1, Math.floor(out.minSquad));
   out.maxSquad = Math.max(out.minSquad, Math.floor(out.maxSquad));
   out.maxOverseas = Math.max(0, Math.floor(out.maxOverseas));
   out.maxAdditions = Math.max(1, Math.floor(out.maxAdditions));
-  const requestedRetentions = Number(overrides?.maxRetentions);
-  const defaultRetentions = RETENTION_LIMITS[format] || 3;
-  out.maxRetentions = Number.isFinite(requestedRetentions)
-    ? Math.min(defaultRetentions, Math.max(0, Math.floor(requestedRetentions)))
-    : defaultRetentions;
   out.minReservePerSlot = Math.max(0, out.minReservePerSlot);
   out.tickMs = Math.max(100, out.tickMs);
   const pace = String(overrides?.pace || out.pace || 'BROADCAST').toUpperCase();
@@ -176,12 +202,13 @@ export class AuctionEngine {
     this._normaliseInternals();
   }
 
-  static create({ format = 'MEGA', difficulty = 'BALANCED', userFranchiseId = 'F1', config = {}, aiClient = null, persist = null } = {}) {
+  static create({ format = 'MEGA', season, difficulty = 'BALANCED', userFranchiseId = 'F1', config = {}, aiClient = null, persist = null } = {}) {
     const fmt = formatOf(format);
-    const conf = normaliseConfig(fmt, config);
-    const players = generatePlayers();
-    const franchises = createFranchises({ format: fmt, config: conf, players });
-    const proceedings = createProceedings(fmt, players);
+    const seasonKey = resolveSeason(season, fmt);
+    const conf = normaliseConfig(fmt, config, seasonKey);
+    const players = generatePlayers(undefined, seasonKey);
+    const franchises = createFranchises({ format: fmt, config: conf, players, season: seasonKey });
+    const proceedings = createProceedings(fmt, players, seasonKey);
     const now = nowIso();
     const chosenUser = franchises.some((franchise) => franchise.id === userFranchiseId) ? userFranchiseId : 'F1';
     const state = {
@@ -190,6 +217,8 @@ export class AuctionEngine {
       createdAt: now,
       savedAt: now,
       format: fmt,
+      season: seasonKey,
+      rules: { ...rulesFor(seasonKey) },
       difficulty: String(difficulty || 'BALANCED').toUpperCase(),
       config: conf,
       userFranchiseId: chosenUser,
@@ -205,6 +234,12 @@ export class AuctionEngine {
       bidHistory: [],
       bidsThisLot: 0,
       nominations: [],
+      // Right to Match is a live three-step lot phase in the 2025 Mega Auction.
+      rtm: null,
+      rtmLog: [],
+      welfareFund: 0,
+      trades: [],
+      matchFeeProjection: matchFeeProjection(seasonKey),
       players,
       franchises,
       eventLog: [],
@@ -297,6 +332,11 @@ export class AuctionEngine {
       case 'GOING_ONCE':
       case 'GOING_TWICE':
         changed = await this._auctionTick(pace);
+        break;
+      case 'RTM_OFFER':
+      case 'RTM_COUNTER':
+      case 'RTM_MATCH':
+        changed = this._resolveRtmTick();
         break;
       case 'SOLD':
       case 'UNSOLD':
@@ -476,11 +516,13 @@ export class AuctionEngine {
           }
         } else if (state.phase === 'BIDDING') {
           if (state.bidsThisLot > 0) this._goingOnce();
-          else this._finaliseLot('UNSOLD');
+          else this._completeLot('UNSOLD');
         } else if (state.phase === 'GOING_ONCE') {
           this._goingTwice();
         } else if (state.phase === 'GOING_TWICE') {
-          this._finaliseLot(state.leaderId && state.currentBid > 0 ? 'SOLD' : 'UNSOLD');
+          this._completeLot(state.leaderId && state.currentBid > 0 ? 'SOLD' : 'UNSOLD');
+        } else if (RTM_PHASES.has(state.phase)) {
+          return failure('Resolve the Right to Match before continuing');
         } else if (state.phase === 'SOLD' || state.phase === 'UNSOLD') {
           this._advanceLot();
         }
@@ -508,6 +550,62 @@ export class AuctionEngine {
         this._pushEvent(selected ? 'NOMINATED' : 'NOMINATION_REMOVED', `${selected ? 'Nominated' : 'Unnominated'} ${player.name} for the accelerated round.`, { playerId: player.id });
         this._announce(`${player.name} ${selected ? 'added to' : 'removed from'} the accelerated nomination list.`, 'NOMINATION');
         return { ok: true };
+      }
+
+      // ------------------------------------------------ right to match (2025)
+      case 'USE_RTM':
+      case 'PASS_RTM':
+      case 'RTM_RAISE':
+      case 'RTM_DECLINE':
+      case 'MATCH_RTM': {
+        const source = action.source === 'AI' ? 'AI' : 'HUMAN';
+        const actor = action.franchiseId || (source === 'HUMAN' ? state.userFranchiseId : null);
+        if (!actor) return failure('A franchise is required for a Right to Match decision');
+        if (source === 'HUMAN' && actor !== state.userFranchiseId) {
+          return failure('You may only decide for your own franchise');
+        }
+        return this._rtmDecision(action.type, actor);
+      }
+
+      // ------------------------------------------- season operations (BCCI)
+      case 'PROPOSE_TRADE': {
+        const outcome = proposeTrade(state, action);
+        if (!outcome.ok) return outcome;
+        this._pushEvent('TRADE', outcome.message, { tradeId: outcome.trade?.id });
+        this._announce(outcome.message, 'TRADE');
+        return outcome;
+      }
+
+      case 'RESPOND_TRADE': {
+        const outcome = respondTrade(state, action);
+        if (!outcome.ok) return outcome;
+        this._pushEvent('TRADE', outcome.message, { tradeId: outcome.trade?.id });
+        this._announce(outcome.message, 'TRADE');
+        return outcome;
+      }
+
+      case 'INJURE_PLAYER': {
+        const outcome = injurePlayer(state, action);
+        if (!outcome.ok) return outcome;
+        this._pushEvent('INJURY', outcome.message, { playerId: action.playerId });
+        this._announce(outcome.message, 'INJURY');
+        return outcome;
+      }
+
+      case 'SIGN_INJURY_REPLACEMENT': {
+        const outcome = signInjuryReplacement(state, action);
+        if (!outcome.ok) return outcome;
+        this._pushEvent('RAPP_REPLACEMENT', outcome.message, { playerId: action.replacementPlayerId });
+        this._announce(outcome.message, 'RAPP');
+        return outcome;
+      }
+
+      case 'PLAYER_WITHDRAW': {
+        const outcome = withdrawPlayer(state, action);
+        if (!outcome.ok) return outcome;
+        this._pushEvent('WITHDRAWAL', outcome.message, { playerId: action.playerId });
+        this._announce(outcome.message, 'WITHDRAWAL');
+        return outcome;
       }
 
       case 'MEETING': {
@@ -592,11 +690,11 @@ export class AuctionEngine {
     if (state.phaseTicks >= dwell) {
       if (state.phase === 'BIDDING') {
         if (state.bidsThisLot > 0) this._goingOnce();
-        else this._finaliseLot('UNSOLD');
+        else this._completeLot('UNSOLD');
       } else if (state.phase === 'GOING_ONCE') {
         this._goingTwice();
       } else if (state.phase === 'GOING_TWICE') {
-        this._finaliseLot(state.leaderId && state.currentBid > 0 ? 'SOLD' : 'UNSOLD');
+        this._completeLot(state.leaderId && state.currentBid > 0 ? 'SOLD' : 'UNSOLD');
       }
       return true;
     }
@@ -645,11 +743,19 @@ export class AuctionEngine {
         requestId: uid('req'),
         difficulty: state.difficulty,
         format: state.format,
+        season: state.season,
+        rules: {
+          totalSalaryCap: config.totalSalaryCap,
+          overseasSalaryCap: config.overseasSalaryCap,
+          rtmAvailable: Boolean(rulesFor(state.season).rtmAvailable),
+          matchFee: config.matchFee,
+        },
         config: {
           maxSquad: config.maxSquad,
           maxOverseas: config.maxOverseas,
           maxAdditions: config.maxAdditions,
           minReservePerSlot: config.minReservePerSlot,
+          overseasSalaryCap: config.overseasSalaryCap,
         },
         player: {
           id: player.id,
@@ -658,6 +764,10 @@ export class AuctionEngine {
           rating: player.rating,
           age: player.age,
           nationality: player.nationality,
+          capped: player.capped !== false,
+          uncappedReason: player.uncappedReason || null,
+          contractFee: player.contractFee || 0,
+          previousFranchiseId: player.previousFranchiseId || null,
           basePrice: player.basePrice,
           stats: { ...player.stats },
         },
@@ -669,6 +779,13 @@ export class AuctionEngine {
           stageKind: stage?.kind || 'SET',
           accelerated: stage?.kind === 'ACCELERATED',
           availableByRole: { ...availableByRole },
+          rtm: state.rtm ? {
+            phase: state.phase,
+            playerId: state.rtm.playerId,
+            originalFranchiseId: state.rtm.originalFranchiseId,
+            leaderFranchiseId: state.rtm.leaderFranchiseId,
+            price: state.rtm.price,
+          } : null,
         },
         self: {
           id: franchise.id,
@@ -679,6 +796,9 @@ export class AuctionEngine {
             ? Number(franchise.additionsLimit)
             : config.maxAdditions,
           overseasCount: overseasOf(franchise),
+          overseasSalarySpend: Number(franchise.overseasSalarySpend) || 0,
+          overseasSalaryCap: config.overseasSalaryCap,
+          rtmCards: Number(franchise.rtmCards) || 0,
           strategy: franchise.strategy,
           isLeader: false,
           withdrawn: false,
@@ -762,10 +882,18 @@ export class AuctionEngine {
 
   _normaliseInternals() {
     const state = this.state;
+    state.season = resolveSeason(state.season, state.format);
+    state.rules = { ...rulesFor(state.season, state.format) };
+    state.config = normaliseConfig(state.format, state.config || {}, state.season);
     if (!Array.isArray(state.eventLog)) state.eventLog = [];
     if (!Array.isArray(state.conversations)) state.conversations = [];
     if (!Array.isArray(state.bidHistory)) state.bidHistory = [];
     if (!Array.isArray(state.nominations)) state.nominations = [];
+    if (!Array.isArray(state.rtmLog)) state.rtmLog = [];
+    if (!Array.isArray(state.trades)) state.trades = [];
+    if (state.rtm === undefined || state.rtm === null) state.rtm = null;
+    if (!Number.isFinite(Number(state.welfareFund))) state.welfareFund = 0;
+    if (!Number.isFinite(Number(state.matchFeeProjection))) state.matchFeeProjection = matchFeeProjection(state.season);
     if (!state.announcement) state.announcement = { id: uid('ann'), text: 'Auction room ready.', kind: 'SYSTEM' };
     if (!Number.isFinite(Number(state.stageTicks))) state.stageTicks = 0;
     if (!Number.isFinite(Number(state.playerCursor))) state.playerCursor = 0;
@@ -773,14 +901,22 @@ export class AuctionEngine {
     if (!Number.isFinite(Number(state.resultTicks))) state.resultTicks = 0;
     if (!Number.isFinite(Number(state.phaseTicks))) state.phaseTicks = 0;
     if (!Number.isFinite(Number(state.aiWaitTicks))) state.aiWaitTicks = 0;
-    if (!state.config.pace || !PACE_NAMES.includes(String(state.config.pace).toUpperCase())) state.config.pace = 'BROADCAST';
-    state.config.pace = String(state.config.pace).toUpperCase();
     if (state.breakReturn === undefined) state.breakReturn = null;
     if (!Array.isArray(state.calledThisStage)) state.calledThisStage = [];
     if (typeof state.retentionsConfirmed !== 'boolean') state.retentionsConfirmed = false;
     if (!Number.isFinite(Number(state.config.maxRetentions))) {
-      state.config.maxRetentions = RETENTION_LIMITS[state.format] || 3;
+      state.config.maxRetentions = RETENTION_LIMITS[state.format] || 6;
     }
+
+    // Keep salary metadata consistent for saves created before the BCCI rules.
+    for (const player of state.players || []) {
+      if (!Number.isFinite(Number(player.salary))) {
+        player.salary = Number(player.soldPrice) > 0
+          ? Number(player.soldPrice)
+          : Number(player.retentionCost) || Number(player.contractFee) || 0;
+      }
+    }
+
     const maxAdditions = Number.isFinite(Number(state.config.maxAdditions))
       ? Number(state.config.maxAdditions)
       : FRANCHISE_CONFIG_DEFAULTS[state.format]?.maxAdditions || 6;
@@ -789,13 +925,23 @@ export class AuctionEngine {
       if (!Array.isArray(franchise.rejected)) franchise.rejected = [];
       if (!Array.isArray(franchise.retentions)) franchise.retentions = [];
       if (!Array.isArray(franchise.existing)) franchise.existing = [];
+      if (!Array.isArray(franchise.previousSquad)) franchise.previousSquad = [];
+      if (!Array.isArray(franchise.trades)) franchise.trades = [];
       if (!Number.isFinite(Number(franchise.retentionSpent))) franchise.retentionSpent = 0;
+      if (!Number.isFinite(Number(franchise.rtmCards))) {
+        franchise.rtmCards = rulesFor(state.season, state.format).rtmAvailable
+          ? Math.max(0, rulesFor(state.season, state.format).maxRetentions - (franchise.retentions || []).length)
+          : 0;
+      }
+      if (!Number.isFinite(Number(franchise.rtmUsed))) franchise.rtmUsed = 0;
+      if (!Number.isFinite(Number(franchise.welfareContribution))) franchise.welfareContribution = 0;
+      if (!Number.isFinite(Number(franchise.overseasSalarySpend))) franchise.overseasSalarySpend = 0;
       if (!Number.isFinite(Number(franchise.additionsLimit))) {
         franchise.additionsLimit = state.format === 'MINI' ? maxAdditions : Number(state.config.maxSquad) || 25;
       }
       // Legacy saves used `existing` without a cost. Treat those as zero-cost
-      // retentions so results keep the purse invariant (purseSpent + purse =
-      // startingPurse) without silently changing an in-flight auction.
+      // retentions so results keep the purse invariant without silently
+      // changing an in-flight auction.
       if (franchise.retentions.length === 0 && franchise.existing.length) {
         franchise.retentions = franchise.existing.map((id) => {
           const player = state.players.find((candidate) => candidate.id === id);
@@ -912,7 +1058,190 @@ export class AuctionEngine {
     this._announce('Going twice.', 'GOING_TWICE');
   }
 
-  _finaliseLot(outcome) {
+  // ------------------------------------------------ right to match (2025)
+
+  /** A sold lot first gives its previous franchise the Right to Match. */
+  _completeLot(outcome) {
+    if (outcome === 'SOLD' && this._maybeStartRtm()) return;
+    this._finaliseLot(outcome);
+  }
+
+  _maybeStartRtm() {
+    const state = this.state;
+    const rules = rulesFor(state.season, state.format);
+    if (!rules.rtmAvailable) return false;
+    const player = this._currentPlayer();
+    if (!player || !player.retentionCandidate || !player.previousFranchiseId) return false;
+    if (!state.leaderId || player.previousFranchiseId === state.leaderId) return false;
+    const original = this._franchise(player.previousFranchiseId);
+    if (!original || !(Number(original.rtmCards) > 0)) return false;
+    if (!validateHold(state, original.id, player, state.currentBid).ok) return false;
+
+    state.rtm = {
+      playerId: player.id,
+      originalFranchiseId: original.id,
+      leaderFranchiseId: state.leaderId,
+      bid: roundMoney(state.currentBid),
+      counterBid: null,
+      price: roundMoney(state.currentBid),
+      usedCard: false,
+      log: [],
+    };
+    state.phase = 'RTM_OFFER';
+    state.phaseTicks = 0;
+    this._pushEvent('RTM_OFFER', `${original.name} may use Right to Match on ${player.name} at ₹${state.rtm.bid} Cr.`, {
+      playerId: player.id,
+      franchiseId: original.id,
+    });
+    this._announce(`Right to Match: ${original.name} can match ${state.rtm.bid} crore for ${player.name}.`, 'RTM');
+    recordDiscussion(state, original.id, 'RTM', `${original.name} holds a Right to Match card for ${player.name} at ${state.rtm.bid} crore.`);
+    return true;
+  }
+
+  /** Resolve the AI side of an RTM exchange; the human side waits for input. */
+  _resolveRtmTick() {
+    const state = this.state;
+    const rtm = state.rtm;
+    if (!rtm || !RTM_PHASES.has(state.phase)) return false;
+    const actor = state.phase === 'RTM_COUNTER' ? rtm.leaderFranchiseId : rtm.originalFranchiseId;
+    if (actor === state.userFranchiseId) return false;
+    const outcome = this._rtmDecision(this._aiRtmDecision(actor), actor);
+    return outcome.ok;
+  }
+
+  _aiRtmDecision(franchiseId) {
+    const state = this.state;
+    const rtm = state.rtm;
+    const player = this._currentPlayer();
+    if (!rtm || !player) return 'PASS_RTM';
+    if (state.phase === 'RTM_COUNTER') {
+      return this._aiWantsPlayer(franchiseId, player, getNextBid(rtm.bid)) ? 'RTM_RAISE' : 'RTM_DECLINE';
+    }
+    const amount = state.phase === 'RTM_MATCH' ? rtm.price : rtm.bid;
+    if (!this._aiWantsPlayer(franchiseId, player, amount)) return 'PASS_RTM';
+    return state.phase === 'RTM_MATCH' ? 'MATCH_RTM' : 'USE_RTM';
+  }
+
+  _aiWantsPlayer(franchiseId, player, amount) {
+    const state = this.state;
+    const franchise = this._franchise(franchiseId);
+    if (!franchise) return false;
+    if (state.phase !== 'RTM_COUNTER' && !(Number(franchise.rtmCards) > 0)) return false;
+    if (Number(franchise.purse) + 1e-9 < amount) return false;
+    if (!validateHold(state, franchiseId, player, amount).ok) return false;
+    const roleWanted = (franchise.targets || []).includes(player.role);
+    const ceiling = (franchise.strategy === 'AGGRESSIVE' ? 95 : franchise.strategy === 'VALUE' ? 82 : 88)
+      + (roleWanted ? 3 : 0);
+    return (Number(player.rating) || 0) <= ceiling;
+  }
+
+  _rtmDecision(type, actor) {
+    const state = this.state;
+    const rtm = state.rtm;
+    if (!rtm || !RTM_PHASES.has(state.phase)) return failure('There is no active Right to Match decision');
+    const player = this._currentPlayer();
+    if (!player || player.id !== rtm.playerId) return failure('The Right to Match lot has changed');
+    const original = this._franchise(rtm.originalFranchiseId);
+    const leader = this._franchise(rtm.leaderFranchiseId);
+    if (!original || !leader) return failure('Right to Match franchises are missing');
+
+    const log = (step, text, extra = {}) => {
+      const entry = { step, at: nowIso(), franchiseId: actor, text, ...extra };
+      rtm.log.push(entry);
+      if (!Array.isArray(state.rtmLog)) state.rtmLog = [];
+      state.rtmLog.push({ playerId: player.id, ...entry });
+      this._pushEvent(`RTM_${step}`, text, { playerId: player.id, franchiseId: actor, ...extra });
+    };
+
+    switch (type) {
+      case 'USE_RTM': {
+        if (state.phase !== 'RTM_OFFER') return failure('Right to Match can only be used at the offer stage');
+        if (actor !== original.id) return failure(`Only ${original.name} can use the Right to Match`);
+        if (!(Number(original.rtmCards) > 0)) return failure(`${original.name} has no RTM cards left`);
+        const check = validateHold(state, actor, player, rtm.bid);
+        if (!check.ok) return failure(check.error);
+        original.rtmCards = Number(original.rtmCards) - 1;
+        original.rtmUsed = (Number(original.rtmUsed) || 0) + 1;
+        rtm.usedCard = true;
+        log('USED', `${original.name} exercises Right to Match on ${player.name} at ₹${rtm.bid} Cr.`);
+        state.phase = 'RTM_COUNTER';
+        state.phaseTicks = 0;
+        this._announce(`${original.name} has matched — ${leader.name} may counter.`, 'RTM');
+        return { ok: true };
+      }
+      case 'RTM_RAISE': {
+        if (state.phase !== 'RTM_COUNTER') return failure('No counter is open');
+        if (actor !== leader.id) return failure(`Only ${leader.name} can counter`);
+        const raised = getNextBid(rtm.bid);
+        const check = validateHold(state, actor, player, raised);
+        if (!check.ok) return failure(check.error);
+        if (Number(leader.purse) + 1e-9 < raised) return failure(`${leader.name} cannot fund the counter`);
+        rtm.counterBid = raised;
+        rtm.price = raised;
+        log('COUNTERED', `${leader.name} counters at ₹${raised} Cr for ${player.name}.`, { amount: raised });
+        state.phase = 'RTM_MATCH';
+        state.phaseTicks = 0;
+        this._announce(`${leader.name} counters at ${raised} crore — ${original.name} to decide.`, 'RTM');
+        return { ok: true };
+      }
+      case 'RTM_DECLINE': {
+        if (state.phase !== 'RTM_COUNTER') return failure('No counter is open');
+        if (actor !== leader.id) return failure(`Only ${leader.name} can decline the counter`);
+        rtm.price = rtm.bid;
+        log('DECLINED', `${leader.name} declines to raise and stands by ₹${rtm.bid} Cr.`);
+        state.phase = 'RTM_MATCH';
+        state.phaseTicks = 0;
+        this._announce(`${leader.name} stands pat. ${original.name} can still match.`, 'RTM');
+        return { ok: true };
+      }
+      case 'MATCH_RTM': {
+        if (state.phase !== 'RTM_MATCH') return failure('The match decision is not open');
+        if (actor !== original.id) return failure(`Only ${original.name} can match`);
+        const check = validateHold(state, actor, player, rtm.price);
+        if (!check.ok) return failure(check.error);
+        log('MATCHED', `${original.name} matches ${rtm.price} crore and takes ${player.name}.`, { amount: rtm.price });
+        this._awardRtm(player, original.id, rtm.price, 'RTM_MATCH');
+        return { ok: true };
+      }
+      case 'PASS_RTM': {
+        if (state.phase === 'RTM_OFFER') {
+          if (actor !== original.id) return failure(`Only ${original.name} can pass on Right to Match`);
+          log('PASSED', `${original.name} passes on the Right to Match for ${player.name}.`);
+          this._awardRtm(player, leader.id, rtm.bid, 'RTM_PASS');
+          return { ok: true };
+        }
+        if (state.phase === 'RTM_MATCH') {
+          if (actor !== original.id) return failure(`Only ${original.name} can decline to match`);
+          log('PASSED', `${original.name} does not match ${rtm.price} crore.`);
+          this._awardRtm(player, leader.id, rtm.price, 'RTM_PASS');
+          return { ok: true };
+        }
+        return failure('The match decision is not open');
+      }
+      default:
+        return failure(`Unknown Right to Match decision: ${type}`);
+    }
+  }
+
+  _awardRtm(player, winnerId, price, source) {
+    const state = this.state;
+    const previousBid = state.currentBid;
+    state.bidHistory.push({
+      id: uid('bid'),
+      at: nowIso(),
+      playerId: player.id,
+      franchiseId: winnerId,
+      amount: roundMoney(price),
+      previousBid,
+      source,
+    });
+    state.leaderId = winnerId;
+    state.currentBid = roundMoney(price);
+    this._refreshBiddingStatus();
+    this._finaliseLot('SOLD', { winnerId, price, source });
+  }
+
+  _finaliseLot(outcome, sale = {}) {
     const state = this.state;
     const player = this._currentPlayer();
     if (!player) {
@@ -920,20 +1249,42 @@ export class AuctionEngine {
       return;
     }
     const stage = this._stage();
+    const winnerId = sale.winnerId || state.leaderId;
+    const price = roundMoney(sale.price ?? state.currentBid);
+    const rules = rulesFor(state.season, state.format);
     let text;
-    if (outcome === 'SOLD' && state.leaderId && state.currentBid > 0) {
-      const franchise = this._franchise(state.leaderId);
-      const price = roundMoney(state.currentBid);
+    if ((outcome === 'SOLD' || sale.winnerId) && winnerId && price > 0) {
+      const franchise = this._franchise(winnerId);
+      const split = salarySplit(price, isOverseas(player), state.season);
       player.availability = 'SOLD';
-      player.soldTo = franchise.id;
+      player.soldTo = winnerId;
       player.soldPrice = price;
-      player.soldRound = stage?.kind === 'ACCELERATED' ? 'ACCELERATED' : 'MAIN';
+      player.soldRound = sale.source || (stage?.kind === 'ACCELERATED' ? 'ACCELERATED' : 'MAIN');
+      player.salary = split.salary;
+      player.welfareContribution = split.welfare;
+      player.auctionRoundBought = rules.format;
+      player.purchasedInMini = rules.format === 'MINI';
       franchise.purse = roundMoney(franchise.purse - price);
       franchise.squad.push(player.id);
-      franchise.purchases.push({ playerId: player.id, price, round: player.soldRound });
+      franchise.purchases.push({
+        playerId: player.id,
+        price,
+        salary: split.salary,
+        welfare: split.welfare,
+        round: player.soldRound,
+        source: sale.source || 'AUCTION',
+      });
+      if (split.welfare > 0) {
+        franchise.welfareContribution = roundMoney((Number(franchise.welfareContribution) || 0) + split.welfare);
+        state.welfareFund = roundMoney((Number(state.welfareFund) || 0) + split.welfare);
+      }
+      if (isOverseas(player)) {
+        franchise.overseasSalarySpend = roundMoney((Number(franchise.overseasSalarySpend) || 0) + split.salary);
+      }
       text = `Sold to ${franchise.name} for ₹${price} Cr — ${player.name}.`;
-      this._pushEvent('SOLD', text, { playerId: player.id, franchiseId: franchise.id });
-      this._announce(`Sold to ${franchise.name} for ${price} crore.`, 'SOLD');
+      if (split.welfare > 0) text += ` ₹${split.welfare} Cr diverted to the BCCI welfare fund.`;
+      this._pushEvent('SOLD', text, { playerId: player.id, franchiseId: winnerId, price, welfare: split.welfare });
+      this._announce(`Sold to ${franchise.name} for ${price} crore${split.welfare > 0 ? `, with ${split.welfare} crore to the welfare fund` : ''}.`, 'SOLD');
     } else {
       player.availability = 'UNSOLD';
       player.soldTo = null;
@@ -944,7 +1295,8 @@ export class AuctionEngine {
       this._announce(`Unsold. ${player.name} is available in the accelerated round.`, 'UNSOLD');
     }
     state.nominations = state.nominations.filter((id) => id !== player.id);
-    state.phase = outcome === 'SOLD' && player.availability === 'SOLD' ? 'SOLD' : 'UNSOLD';
+    state.rtm = null;
+    state.phase = player.availability === 'SOLD' ? 'SOLD' : 'UNSOLD';
     state.resultTicks = 0;
     state.goingStage = 0;
     for (const franchise of state.franchises) franchise.biddingStatus = 'IDLE';

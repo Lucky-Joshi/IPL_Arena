@@ -164,7 +164,7 @@ async function createAuction(body) {
   const difficulty = String(body.difficulty || 'BALANCED').toUpperCase();
   const userFranchiseId = String(body.userFranchiseId || 'F1');
   const config = { ...CONFIG_DEFAULTS, ...(body.config && typeof body.config === 'object' ? body.config : {}) };
-  const created = AuctionEngine.create({ format, difficulty, userFranchiseId, config, aiClient, persist });
+  const created = AuctionEngine.create({ format, season: body.season, difficulty, userFranchiseId, config, aiClient, persist });
   engine = wrapEngine(created);
   await flushSave();
   // A fresh engine that does not persist in its constructor still gets a save here.
@@ -180,7 +180,13 @@ async function dispatchAction(body) {
   const state = active.getState();
   const action = String(body.action || '');
 
-  if (action === 'BID' || action === 'WITHDRAW' || action === 'SET_RETENTIONS') {
+  const HUMAN_ACTIONS = new Set([
+    'BID', 'WITHDRAW', 'SET_RETENTIONS',
+    'USE_RTM', 'PASS_RTM', 'RTM_RAISE', 'RTM_DECLINE', 'MATCH_RTM',
+    'PROPOSE_TRADE', 'RESPOND_TRADE', 'INJURE_PLAYER',
+    'SIGN_INJURY_REPLACEMENT', 'PLAYER_WITHDRAW',
+  ]);
+  if (HUMAN_ACTIONS.has(action)) {
     const requested = body.franchiseId || state.userFranchiseId;
     if (requested !== state.userFranchiseId) {
       return { ok: false, error: 'Only the human franchise can be controlled from this client', state };

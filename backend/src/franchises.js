@@ -8,12 +8,35 @@
  * six-or-so additions that make a mini auction work.
  */
 
-import { mulberry32 } from './players.js';
+import { mulberry32, statusFor } from './players.js';
+import { basePriceForRating, resolveSeason, SEASONS } from './rules.js';
+
+function configForSeason(key) {
+  const rules = SEASONS[key] || SEASONS[2025];
+  return {
+    startingPurse: rules.startingPurse,
+    totalSalaryCap: rules.totalSalaryCap,
+    overseasSalaryCap: rules.overseasSalaryCap,
+    minSquad: rules.minSquad,
+    maxSquad: rules.maxSquad,
+    maxOverseas: rules.maxOverseas,
+    maxAdditions: rules.format === 'MEGA' ? rules.maxSquad : 6,
+    maxRetentions: rules.maxRetentions,
+    maxCappedRetentions: rules.maxCappedRetentions,
+    maxUncappedRetentions: rules.maxUncappedRetentions,
+    matchFee: rules.matchFee,
+    minReservePerSlot: 0.2,
+    tickMs: 1000,
+    pace: 'BROADCAST',
+  };
+}
 
 export const FRANCHISE_CONFIG_DEFAULTS = {
-  MEGA: { startingPurse: 120, minSquad: 18, maxSquad: 25, maxOverseas: 8, maxAdditions: 25, maxRetentions: 3, minReservePerSlot: 0.2, tickMs: 1000, pace: 'BROADCAST' },
-  MINI: { startingPurse: 50, minSquad: 18, maxSquad: 25, maxOverseas: 8, maxAdditions: 6, maxRetentions: 15, minReservePerSlot: 0, tickMs: 1000, pace: 'BROADCAST' },
+  MEGA: configForSeason('2025'),
+  MINI: configForSeason('2026'),
 };
+
+export { configForSeason };
 
 const TEMPLATES = [
   {
@@ -176,9 +199,9 @@ function buildSquadRoles(composition, rng) {
   return roles;
 }
 
-function makeRetainedPlayer(id, role, nationality, rng) {
-  const rating = 56 + Math.floor(rng() * 27);
-  const quality = (rating - 56) / 26;
+function makeRetainedPlayer(id, role, nationality, rng, franchiseId, forceUncapped = false, season = '2025') {
+  const rating = 56 + Math.floor(rng() * 34);
+  const quality = (rating - 56) / 33;
   const bowlingStyle = role === 'BOWLER'
     ? pick(rng() < 0.45 ? SPIN : PACE, rng)
     : role === 'ALLROUNDER' && rng() < 0.6
@@ -198,16 +221,19 @@ function makeRetainedPlayer(id, role, nationality, rng) {
         ? pick(['GENUINE_ALLROUNDER', 'BAT_ALLROUNDER', 'BOWL_ALLROUNDER'], rng)
         : 'KEEPER_BATTER';
 
+  const age = 22 + Math.floor(rng() * 14);
+  const experience = 3 + Math.floor(rng() * 13);
+  const status = statusFor({ rating, age, experience, nationality, rng, forceUncapped });
   return {
     id,
     name: retainedName(nationality, rng, retainedName.used),
-    age: 22 + Math.floor(rng() * 14),
+    age,
     nationality,
     country: nationality,
     role,
     subtype,
     rating,
-    basePrice: 0,
+    basePrice: basePriceForRating(rating),
     battingStyle: rng() < 0.68 ? 'Right-hand bat' : 'Left-hand bat',
     bowlingStyle,
     stats: {
@@ -223,28 +249,32 @@ function makeRetainedPlayer(id, role, nationality, rng) {
       economy: wickets > 0 ? round1(5 + (1 - quality) * 3 + rng()) : 0,
       bestFigures: wickets > 0 ? `${1 + Math.floor(rng() * 4)}/${12 + Math.floor(rng() * 30)}` : '0/0',
     },
-    experience: 3 + Math.floor(rng() * 13),
+    experience,
     category: role,
-    // Retention candidates live in the shared pool until a franchise picks
-    // them. They are not part of any auction stage, so they never get called.
+    season: resolveSeason(season),
+    ...status,
+    // Every R0xx player starts on a real previous-season contract. Retained
+    // players stay off the auction block; released ones are called normally.
     availability: 'AVAILABLE',
     soldTo: null,
-    soldPrice: 0,
+    soldPrice: null,
     soldRound: null,
     existing: false,
     retained: false,
     retentionCandidate: true,
+    previousFranchiseId: franchiseId,
   };
 }
 
 /**
- * Create the MINI retention-candidate pool: 15 role-balanced existing players
- * per franchise (R0xx ids). These are NOT pre-assigned; the user and the AI
- * choose from them during SETUP.
+ * Build each franchise's previous-season squad from which real retentions are
+ * chosen. Every player can only be retained by the franchise that held their
+ * contract; unretained players automatically enter the auction pool.
  * @returns {{retainedPlayers: Array<Object>, squads: Object<string, string[]>}}
  */
-export function createMiniSquads({ franchises, config = FRANCHISE_CONFIG_DEFAULTS.MINI, rng } = {}) {
+export function createPreviousSquads({ franchises, season = '2025', rng } = {}) {
   const random = typeof rng === 'function' ? rng : mulberry32(424242);
+  const seasonKey = resolveSeason(season);
   const teams = franchises || TEMPLATES.map((template, i) => ({
     ...template,
     id: `F${i + 1}`,
@@ -253,38 +283,52 @@ export function createMiniSquads({ franchises, config = FRANCHISE_CONFIG_DEFAULT
   }));
   retainedName.used = new Set();
   const retainedPlayers = [];
+  const squads = {};
   let counter = 0;
 
   teams.forEach((franchise, teamIndex) => {
     const roles = buildSquadRoles(RETAINED_ROLE_PLAN[teamIndex % RETAINED_ROLE_PLAN.length], random);
     const overseasCount = Math.min(4, 2 + Math.floor(random() * 3));
     const overseasSlots = new Set(shuffled(roles.map((_, i) => i), random).slice(0, overseasCount));
-    for (let position = 0; position < roles.length; position += 1) {
+    // Each previous squad always contains at least two uncapped Indians so the
+    // Mega uncapped retention slab (₹4 Cr, max two) is genuinely selectable.
+    const domesticSlots = shuffled(roles.map((_, i) => i).filter((i) => !overseasSlots.has(i)), random);
+    const uncappedSlots = new Set(domesticSlots.slice(0, 3));
+    squads[franchise.id] = [];
+    roles.forEach((role, position) => {
       counter += 1;
-      const role = roles[position];
       const nationality = overseasSlots.has(position)
         ? OVERSEAS_COUNTRIES[(teamIndex + position) % OVERSEAS_COUNTRIES.length]
         : 'India';
-      retainedPlayers.push(makeRetainedPlayer(`R${String(counter).padStart(3, '0')}`, role, nationality, random));
-    }
+      const id = `R${String(counter).padStart(3, '0')}`;
+      retainedPlayers.push(makeRetainedPlayer(id, role, nationality, random, franchise.id, uncappedSlots.has(position)));
+      squads[franchise.id].push(id);
+    });
   });
 
-  void config; // accepted for API symmetry
-  void franchises; // candidates are format-wide, not owned until selected
-  return { retainedPlayers, squads: {} };
+  void seasonKey; // kept for API symmetry; status generation is season-agnostic
+  return { retainedPlayers, squads };
+}
+
+/** Backwards-compatible alias used by older callers and tests. */
+export function createMiniSquads({ franchises, config, rng } = {}) {
+  const season = config?.season || '2026';
+  return createPreviousSquads({ franchises, season, rng });
 }
 
 /**
  * Build the ten franchises for a format. Both formats start with empty squads.
  * For MINI, retention candidates are appended to the supplied `players` array.
  */
-export function createFranchises({ format = 'MEGA', config, players = [], rng } = {}) {
+export function createFranchises({ format = 'MEGA', config, players = [], rng, season } = {}) {
   const fmt = String(format).toUpperCase() === 'MINI' ? 'MINI' : 'MEGA';
+  const seasonKey = resolveSeason(season, fmt);
+  const base = configForSeason(seasonKey);
   const conf = config || FRANCHISE_CONFIG_DEFAULTS[fmt];
   const random = typeof rng === 'function' ? rng : mulberry32(fmt === 'MINI' ? 724241 : 191114);
   const maxAdditions = Number.isFinite(Number(conf.maxAdditions))
     ? Number(conf.maxAdditions)
-    : FRANCHISE_CONFIG_DEFAULTS[fmt].maxAdditions;
+    : base.maxAdditions;
 
   const franchises = TEMPLATES.map((template, i) => ({
     id: `F${i + 1}`,
@@ -300,25 +344,33 @@ export function createFranchises({ format = 'MEGA', config, players = [], rng } 
     analyst: template.analyst,
     scoutingHead: template.scoutingHead,
     strategy: template.strategy,
-    purse: typeof conf.startingPurse === 'number' ? conf.startingPurse : FRANCHISE_CONFIG_DEFAULTS[fmt].startingPurse,
+    purse: typeof conf.startingPurse === 'number' ? conf.startingPurse : base.startingPurse,
     squad: [],
     existing: [],
+    previousSquad: [],
     retentions: [],
     retentionSpent: 0,
+    rtmCards: SEASONS[seasonKey].rtmAvailable ? SEASONS[seasonKey].maxRetentions : 0,
+    rtmUsed: 0,
     additionsLimit: fmt === 'MEGA' ? Number(conf.maxSquad) || 25 : maxAdditions,
     purchases: [],
+    trades: [],
+    welfareContribution: 0,
     rejected: [],
     targets: template.targets.slice(),
     discussions: [],
     biddingStatus: 'IDLE',
   }));
 
-  if (fmt === 'MINI') {
-    const { retainedPlayers } = createMiniSquads({ franchises, config: conf, rng: random });
-    const knownIds = new Set(players.map((player) => player.id));
-    for (const player of retainedPlayers) {
-      if (!knownIds.has(player.id)) players.push(player);
-    }
+  // Both Mega and Mini seasons need previous-season contracts: Mega for
+  // capped/uncapped retentions and RTM cards, Mini for contract-fee retentions.
+  const { retainedPlayers, squads } = createPreviousSquads({ franchises, season: seasonKey, rng: random });
+  const knownIds = new Set(players.map((player) => player.id));
+  for (const player of retainedPlayers) {
+    if (!knownIds.has(player.id)) players.push(player);
+  }
+  for (const franchise of franchises) {
+    franchise.previousSquad = (squads[franchise.id] || []).slice();
   }
   return franchises;
 }

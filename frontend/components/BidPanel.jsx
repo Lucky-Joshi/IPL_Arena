@@ -11,7 +11,11 @@ import {
   overseasCount,
   phaseLabel,
   phaseSecondsRemaining,
+  playerById,
   projectedBid,
+  RTM_PHASES,
+  rtmActor,
+  rtmOptions,
   squadLimit,
 } from '../lib/format';
 
@@ -41,7 +45,9 @@ export default function BidPanel({ state, player, onAction, busy }) {
   const nominated = Boolean(player && state.nominations?.includes(player.id));
 
   let bidBlock = '';
-  if (!bidOpen) {
+  if (RTM_PHASES.includes(state.phase)) {
+    bidBlock = 'Right to Match is being resolved — bidding resumes after the decision.';
+  } else if (!bidOpen) {
     bidBlock = state.phase === 'OPENING' || state.phase === 'FINAL_REVIEW'
       ? 'Auctioneer is speaking — bids open with the next lot.'
       : 'Waiting for the next lot on the block.';
@@ -59,6 +65,11 @@ export default function BidPanel({ state, player, onAction, busy }) {
   const activePhase = !['SETUP', 'COMPLETED', 'SET_BREAK', 'STRATEGY_BREAK'].includes(state.phase);
   const canWithdraw = bidOpen && !withdrawn && Boolean(state.activeBidderIds?.includes(me.id));
   const showContinue = stage?.kind === 'ANNOUNCEMENT' && state.phase !== 'COMPLETED';
+  const rtmDecisionActor = rtmActor(state);
+  const isRtmTurn = rtmDecisionActor === me.id;
+  const rtmPlayer = playerById(state, state.rtm?.playerId);
+  const rtmOriginal = franchiseById(state, state.rtm?.originalFranchiseId);
+  const rtmLeader = franchiseById(state, state.rtm?.leaderFranchiseId);
   const secondsLeft = phaseSecondsRemaining(state);
   const countdown = countdownLabel(state);
   const urgent = state.phase === 'GOING_TWICE' || (secondsLeft > 0 && secondsLeft <= 2);
@@ -93,6 +104,39 @@ export default function BidPanel({ state, player, onAction, busy }) {
         <div><span>RESERVE</span><strong>{cr(reserve)}</strong></div>
         <div><span>STATUS</span><strong className={`status-${String(me.biddingStatus || 'IDLE').toLowerCase()}`}>{me.biddingStatus || 'IDLE'}</strong></div>
       </div>
+
+      {state.rtm && RTM_PHASES.includes(state.phase) && (
+        <div className={`rtm-panel ${isRtmTurn ? 'is-my-turn' : ''}`} role="group" aria-label="Right to Match decision">
+          <div className="rtm-heading">
+            <span>RIGHT TO MATCH</span>
+            <strong>{cr(state.rtm.price)}</strong>
+          </div>
+          <p className="rtm-detail">
+            <strong>{rtmPlayer?.name || 'Player'}</strong> · {rtmOriginal?.short || '—'} (previous franchise)
+            vs {rtmLeader?.short || '—'} (leading bidder)
+          </p>
+          <p className={`rtm-turn ${isRtmTurn ? 'is-mine' : ''}`}>
+            {isRtmTurn
+              ? 'Your call — choose how your franchise responds.'
+              : `Waiting for ${franchiseById(state, rtmDecisionActor)?.short || 'the other franchise'} to decide.`}
+          </p>
+          {isRtmTurn && (
+            <div className="bid-action-grid">
+              {rtmOptions(state).map((option) => (
+                <button
+                  key={option.type}
+                  type="button"
+                  className={`btn ${option.primary ? 'btn-gold' : 'btn-ghost'}`}
+                  disabled={busy}
+                  onClick={() => submit(option.type)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <button
         type="button"

@@ -66,6 +66,8 @@ export function fallbackDecide(ctx = {}) {
   const maxOverseas = num(config.maxOverseas, 8);
   const overseasCount = num(self.overseasCount, 0);
   const reserve = num(config.minReservePerSlot, 0.2);
+  const overseasCap = num(config.overseasSalaryCap, 0);
+  const salaryBlocked = Boolean(isOverseas && overseasCap > 0);
   const purse = num(self.purse, 0);
   const available = auction.availableByRole || {};
   const alternatives = num(available[role], 10);
@@ -83,6 +85,7 @@ export function fallbackDecide(ctx = {}) {
   if (alternatives <= 4) desire += 0.1;
   else if (alternatives >= 18) desire -= 0.05;
   if (isOverseas && overseasCount < maxOverseas - 2) desire += 0.03;
+  if (player.capped === false) desire += 0.04; // uncapped flexibility
   if (strategy === 'AGGRESSIVE') desire += 0.1;
   if (strategy === 'VALUE') desire -= 0.05;
   if (strategy === 'CONSERVATIVE') desire -= 0.03;
@@ -92,7 +95,10 @@ export function fallbackDecide(ctx = {}) {
   desire += (hashString(`${id}:${player.id || ''}:${rating}`) - 0.5) * 0.28;
 
   const ceiling = clamp(purse - reserveNeeded, 0, 1000);
-  const canStretch = nextBid <= ceiling || nextBid <= num(player.basePrice, 1) + 0.5;
+  // Salary above the overseas ceiling is diverted to the welfare fund, so the
+  // fallback bidder treats it as having no squad value.
+  const effectiveCeiling = salaryBlocked ? Math.min(ceiling, overseasCap) : ceiling;
+  const canStretch = nextBid <= effectiveCeiling || nextBid <= num(player.basePrice, 1) + 0.5;
   const wants = desire >= 0.5;
 
   if (self.withdrawn || squadFull || overseasFull || !affordable || !canStretch || !wants) {

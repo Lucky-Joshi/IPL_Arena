@@ -3,7 +3,16 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AuctionEngine, computeResults, getNextBid, validateBid, retentionCost } from '../src/engine.js';
+import {
+  AuctionEngine,
+  computeResults,
+  getNextBid,
+  validateBid,
+  retentionCost,
+  salarySplit,
+  matchFeeProjection,
+  rulesFor,
+} from '../src/engine.js';
 import { fallbackDecide } from '../src/aiClient.js';
 import { generatePlayers } from '../src/players.js';
 
@@ -17,6 +26,7 @@ const SAVE_FILE = path.join(BACKEND, 'data', 'smoke-state.json');
 const TICK_MS = 100;
 // Automated scenarios stay on FAST; the pacing scenario explicitly checks BROADCAST.
 const CONFIG = { tickMs: TICK_MS, pace: 'FAST' };
+const RTM_PHASES = new Set(['RTM_OFFER', 'RTM_COUNTER', 'RTM_MATCH']);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -181,6 +191,12 @@ function assertInvariants(state, label = 'auction') {
     // bidHistory is append-only, so array order is the authoritative chronology.
     let leader = null;
     for (const bid of bids) {
+      // RTM entries are settlement records, not paddle raises, so a franchise
+      // can legitimately appear twice when a lot is matched or passed through.
+      if (String(bid.source || '').startsWith('RTM')) {
+        leader = bid.franchiseId;
+        continue;
+      }
       assert.notEqual(leader, bid.franchiseId, `${label}: ${leader} bid twice in a row on ${playerId}`);
       leader = bid.franchiseId;
     }
@@ -194,6 +210,15 @@ async function advanceHttp(state) {
   if (phase === 'PLAYER_INTRODUCTION') return act({ action: 'OPEN_BIDDING' });
   if (phase === 'OPENING' || phase === 'FINAL_REVIEW') return act({ action: 'CONTINUE' });
   if (phase === 'SOLD' || phase === 'UNSOLD') return act({ action: 'NEXT' });
+  if (RTM_PHASES.has(phase)) {
+    const actor = phase === 'RTM_COUNTER' ? state.rtm?.leaderFranchiseId : state.rtm?.originalFranchiseId;
+    if (actor === state.userFranchiseId) {
+      const action = phase === 'RTM_COUNTER' ? 'RTM_DECLINE' : 'PASS_RTM';
+      return act({ action, franchiseId: actor });
+    }
+    await sleep(TICK_MS + 5); // AI RTM decisions resolve on a tick
+    return null;
+  }
   if (relevantPhases(state).has(phase)) {
     // Give the AI a couple of real ticks so a bidding war can develop, then
     // fast-forward the mechanical going-once/going-twice steps.
@@ -231,6 +256,14 @@ function advanceEngine(engine, state) {
   if (phase === 'PLAYER_INTRODUCTION') return engine.dispatch({ type: 'OPEN_BIDDING' });
   if (phase === 'OPENING' || phase === 'FINAL_REVIEW') return engine.dispatch({ type: 'CONTINUE' });
   if (phase === 'SOLD' || phase === 'UNSOLD') return engine.dispatch({ type: 'NEXT' });
+  if (RTM_PHASES.has(phase)) {
+    const actor = phase === 'RTM_COUNTER' ? state.rtm?.leaderFranchiseId : state.rtm?.originalFranchiseId;
+    if (actor === state.userFranchiseId) {
+      const type = phase === 'RTM_COUNTER' ? 'RTM_DECLINE' : 'PASS_RTM';
+      return engine.dispatch({ type, franchiseId: actor });
+    }
+    return null; // AI RTM decisions resolve on the next tick
+  }
   if (relevantPhases(state).has(phase)) {
     if ((state.bidsThisLot || 0) >= 2 || phase === 'GOING_ONCE' || phase === 'GOING_TWICE') {
       return engine.dispatch({ type: 'NEXT' });
@@ -253,8 +286,9 @@ async function driveEngine(engine, { maxSteps = 1200, stop = () => false, phases
   return engine.getState();
 }
 
-function makeDirectEngine(format, aiClient, config = {}) {
+function makeDirectEngine(format, aiClient, config = {}, season = format === 'MINI' ? '2026' : '2025') {
   const base = AuctionEngine.create({
+    season,
     format,
     difficulty: 'BALANCED',
     userFranchiseId: 'F1',
@@ -401,150 +435,178 @@ async function scenarioBreakFreeze() {
 }
 
 async function scenarioInsufficientPurse() {
-  const created = await act({
-    action: 'CREATE', format: 'MEGA', difficulty: 'BALANCED', userFranchiseId: 'F1', config: { ...CONFIG, startingPurse: 0.3 },
+  // The BCC purse is authoritative, so model a depleted franchise directly on
+  // a cloned state instead of trying to override the season configuration.
+  const created = AuctionEngine.create({ season: '2025', format: 'MEGA', config: CONFIG, persist: () => {} });
+  created.dispatch({ type: 'START' });
+  const live = await driveEngine(created, {
+    maxSteps: 200,
+    stop: (s) => Boolean(s.currentPlayerId) && relevantPhases(s).has(s.phase),
   });
-  assert.equal(created.ok, true, `small-purse CREATE failed: ${created.error}`);
-  // FAST pace leaves only a 100 ms bidding window, so the lot can close between
-  // reading state and posting the bid. Freeze the clock before asserting, and
-  // retry if the server tick won that race.
-  let state = null;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    await driveUntilLot(160);
-    await act({ action: 'PAUSE' });
-    const frozen = await getState();
-    if (frozen.currentPlayerId && relevantPhases(frozen).has(frozen.phase)) {
-      state = frozen;
-      break;
-    }
-    await act({ action: 'UNPAUSE' });
-  }
-  assert.ok(state, 'could not freeze an open lot for the tiny-purse scenario');
-  const player = state.players.find((p) => p.id === state.currentPlayerId);
-  assert.ok(player && player.basePrice > 0.3, 'need a player with base price above the tiny purse');
-  const amount = nextBidFor(state);
-  const result = await act({ action: 'BID', franchiseId: state.userFranchiseId, amount });
+  assert.ok(live.currentPlayerId, 'need an open lot for the tiny-purse check');
+  const snapshot = clone(created.getState());
+  const me = snapshot.franchises.find((f) => f.id === snapshot.userFranchiseId);
+  me.purse = 0.3;
+  const engine = new AuctionEngine(snapshot, { persist: () => {} });
+  const player = snapshot.players.find((p) => p.id === snapshot.currentPlayerId);
+  assert.ok(player && Number(player.basePrice) > 0.3, 'need a player above the tiny purse');
+  const amount = nextBidFor(snapshot);
+  const result = engine.dispatch({ type: 'BID', franchiseId: snapshot.userFranchiseId, amount });
   assert.equal(result.ok, false, 'insufficient-purse bid should be rejected');
-  assert.ok(result.error && /purse|funds|budget|afford/i.test(result.error), `unexpected rejection: ${result.error}`);
-  assert.ok(result.state, 'validation failure must still return state for the UI');
-  await act({ action: 'UNPAUSE' });
-  pass('insufficient purse human BID rejected with state returned');
+  assert.match(result.error || '', /purse|funds|budget|afford/i);
+  pass('insufficient purse human BID rejected on a depleted franchise');
 }
 
 async function scenarioRetentions() {
-  // ---- MEGA: three costed retentions, rating slabs, AI auto-pick ----
+  // ---- 2025 MEGA: own contract list only, capped/uncapped ceilings, slabs ----
   const mega = AuctionEngine.create({
-    format: 'MEGA', config: CONFIG, userFranchiseId: 'F1', persist: () => {},
+    season: '2025', format: 'MEGA', config: CONFIG, userFranchiseId: 'F1', persist: () => {},
   });
   let state = mega.getState();
-  assert.equal(state.config.maxRetentions, 3);
+  assert.equal(state.season, '2025');
+  assert.equal(state.config.maxRetentions, 6);
+  assert.equal(state.config.startingPurse, 120);
+  assert.equal(state.config.totalSalaryCap, 146);
   assert.ok(state.franchises.every((f) => f.squad.length === 0 && f.retentions.length === 0));
+  assert.ok(state.franchises.every((f) => f.rtmCards === 6), 'each franchise starts with 6 RTM cards');
   assert.equal(state.retentionsConfirmed, false);
 
-  const top = state.players.filter((p) => p.availability === 'AVAILABLE')
+  // A franchise can only retain players from its own previous-season contracts.
+  const ownershipCheck = AuctionEngine.create({ season: '2025', format: 'MEGA', config: CONFIG, persist: () => {} });
+  const foreign = ownershipCheck.getState().players.find((p) => p.previousFranchiseId === 'F2' && p.retentionCandidate);
+  assert.ok(foreign, 'need a player contracted to F2 for the ownership check');
+  const foreignResult = ownershipCheck.dispatch({ type: 'SET_RETENTIONS', playerIds: [foreign.id] });
+  assert.equal(foreignResult.ok, false, 'another franchise\'s contract must not be retainable');
+  assert.match(foreignResult.error || '', /another franchise|contracted/i);
+
+  const owned = state.players.filter((p) => p.previousFranchiseId === 'F1' && p.retentionCandidate);
+  assert.ok(owned.length >= 6, 'F1 should have at least six previous-season contracts');
+  const cappedPool = owned.filter((p) => p.capped !== false)
     .sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id));
-  const picks = top.slice(0, 3).map((p) => p.id);
-  const expectedCost = Math.round(top.slice(0, 3).reduce((total, p) => total + retentionCost(p), 0) * 100) / 100;
+  const uncappedPool = owned.filter((p) => p.capped === false)
+    .sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id));
+  assert.ok(cappedPool.length >= 5 && uncappedPool.length >= 1, 'need capped and uncapped candidates');
+
+  const picks = [...cappedPool.slice(0, 5), ...uncappedPool.slice(0, 1)].map((p) => p.id);
+  const expectedCost = 18 + 14 + 11 + 18 + 14 + 4;
   const set = mega.dispatch({ type: 'SET_RETENTIONS', playerIds: picks });
   assert.equal(set.ok, true, `MEGA SET_RETENTIONS failed: ${set.error}`);
-  assert.equal(set.retentionSpent, expectedCost, 'rating-slab cost mismatch');
+  assert.equal(set.retentionSpent, expectedCost, 'capped/uncapped slab cost mismatch');
 
   state = mega.getState();
   const mine = state.franchises.find((f) => f.id === 'F1');
-  assert.equal(mine.retentions.length, 3);
-  assert.ok(Math.abs(mine.purse - (state.config.startingPurse - expectedCost)) < 0.001, 'purse not debited');
-  assert.equal(mine.additionsLimit, state.config.maxSquad);
+  assert.equal(mine.retentions.length, 6);
+  assert.equal(mine.rtmCards, 0, 'six retentions consume every RTM card');
+  assert.equal(mine.retentionSpent, expectedCost);
+  assert.ok(Math.abs(mine.purse - (120 - expectedCost)) < 0.001, 'purse not debited');
+  assert.deepEqual(mine.retentions.filter((r) => r.capped !== false).map((r) => r.cost), [18, 14, 11, 18, 14]);
+  assert.equal(mine.retentions.find((r) => r.capped === false).cost, 4);
   for (const id of picks) {
     const player = state.players.find((p) => p.id === id);
     assert.equal(player.availability, 'SOLD');
     assert.equal(player.soldTo, 'F1');
     assert.equal(player.retained, true);
-    assert.ok(player.retentionCost > 0, 'retention cost must be stamped on the player');
+    assert.equal(player.salary, player.retentionCost, 'retained salary must be stamped');
   }
   for (const rival of state.franchises.filter((f) => f.id !== 'F1')) {
-    assert.equal(rival.retentions.length, 3, `${rival.id} did not auto-retain`);
-    assert.ok(rival.retentionSpent > 0, `${rival.id} did not pay for retentions`);
+    assert.ok(rival.retentions.length > 0 && rival.retentions.length <= 6, `${rival.id} AI retention count out of range`);
+    assert.ok(rival.retentions.filter((r) => r.capped !== false).length <= 5, `${rival.id} too many capped retentions`);
+    assert.ok(rival.retentions.filter((r) => r.capped === false).length <= 2, `${rival.id} too many uncapped retentions`);
+    assert.equal(rival.rtmCards, 6 - rival.retentions.length, `${rival.id} RTM card count wrong`);
   }
   assert.equal(state.retentionsConfirmed, true);
-  pass('MEGA: 3 user retentions / rating-slab cost / purse debited / AI auto-retention');
+  pass('2025 MEGA: own-contract retentions / capped+uncapped slabs / RTM cards / AI auto-pick');
 
-  // Rejected over-limit selection must not disturb the current setup.
-  const tooMany = mega.dispatch({ type: 'SET_RETENTIONS', playerIds: top.slice(0, 4).map((p) => p.id) });
-  assert.equal(tooMany.ok, false, '4 MEGA retentions should be rejected');
-  assert.match(tooMany.error || '', /3|at most/i);
-  assert.equal(mega.getState().franchises[0].retentions.length, 3, 'rejected selection mutated state');
+  if (uncappedPool.length >= 3) {
+    const threeUncapped = [...cappedPool.slice(0, 3), ...uncappedPool.slice(0, 3)].map((p) => p.id);
+    const rejected = mega.dispatch({ type: 'SET_RETENTIONS', playerIds: threeUncapped });
+    assert.equal(rejected.ok, false, 'three uncapped retentions should be rejected');
+    assert.match(rejected.error || '', /uncapped/i);
+  }
+  const sixCapped = mega.dispatch({ type: 'SET_RETENTIONS', playerIds: cappedPool.slice(0, 6).map((p) => p.id) });
+  assert.equal(sixCapped.ok, false, 'six capped retentions should breach the capped ceiling');
+  assert.match(sixCapped.error || '', /capped/i);
+  assert.equal(mega.getState().franchises[0].retentions.length, 6, 'rejected plan mutated state');
+  pass('2025 MEGA: 3-uncapped and 6-capped retentions rejected');
 
-  // Re-selection restores every player and the full purse, then re-picks AI.
   const cleared = mega.dispatch({ type: 'SET_RETENTIONS', playerIds: [] });
   assert.equal(cleared.ok, true, `re-selection to zero failed: ${cleared.error}`);
   state = mega.getState();
   assert.equal(state.franchises[0].retentions.length, 0);
-  assert.equal(state.franchises[0].purse, state.config.startingPurse, 'purse not restored on re-selection');
+  assert.equal(state.franchises[0].purse, 120);
+  assert.equal(state.franchises[0].rtmCards, 6);
   for (const id of picks) {
     const player = state.players.find((p) => p.id === id);
     assert.equal(player.availability, 'AVAILABLE');
     assert.equal(player.retained, false);
   }
-  pass('MEGA: re-selection resets players/purses and recomputes AI retentions');
+  pass('2025 MEGA: re-selection restores players, purse and RTM cards');
 
-  // START with no explicit SET_RETENTIONS confirms an empty selection.
-  const autoStart = AuctionEngine.create({ format: 'MEGA', config: CONFIG, persist: () => {} });
+  const autoStart = AuctionEngine.create({ season: '2025', format: 'MEGA', config: CONFIG, persist: () => {} });
   const started = autoStart.dispatch({ type: 'START' });
   assert.equal(started.ok, true, `START auto-confirm failed: ${started.error}`);
   const autoState = autoStart.getState();
   assert.equal(autoState.retentionsConfirmed, true);
   assert.equal(autoState.franchises[0].retentions.length, 0, 'zero-retention option lost');
-  assert.ok(autoState.franchises.slice(1).every((f) => f.retentions.length === 3), 'AI retentions missing after START');
   assert.notEqual(autoState.phase, 'SETUP');
-  pass('zero-retention start: START confirms empty selection and AI still retains');
+  pass('zero-retention start confirms an empty selection for the human');
 
-  // ---- MINI: fifteen candidates, cap, cap-derived additionsLimit ----
-  const mini = AuctionEngine.create({ format: 'MINI', config: CONFIG, persist: () => {} });
+  // ---- 2026 MINI: contract fees, no RTM, adaptive additionsLimit ----
+  const mini = AuctionEngine.create({ season: '2026', format: 'MINI', config: CONFIG, persist: () => {} });
   let miniState = mini.getState();
-  assert.equal(miniState.config.maxRetentions, 15);
-  const candidates = miniState.players.filter((p) => p.retentionCandidate);
-  assert.ok(candidates.length >= 150, `expected >=150 MINI retention candidates, got ${candidates.length}`);
-  assert.ok(miniState.franchises.every((f) => f.squad.length === 0), 'MINI squads must start empty');
+  assert.equal(miniState.config.startingPurse, 125);
+  assert.equal(miniState.config.totalSalaryCap, 151);
+  assert.equal(miniState.config.overseasSalaryCap, 18);
+  assert.equal(miniState.config.maxRetentions, 25);
+  assert.ok(miniState.franchises.every((f) => f.rtmCards === 0));
 
-  const fifteen = candidates.sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id)).slice(0, 15).map((p) => p.id);
-  const miniSet = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: fifteen });
-  assert.equal(miniSet.ok, true, `MINI 15-retention selection failed: ${miniSet.error}`);
+  const miniOwned = miniState.players.filter((p) => p.previousFranchiseId === 'F1' && p.retentionCandidate)
+    .sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id));
+  const ten = miniOwned.slice(0, 10).map((p) => p.id);
+  const miniCost = Math.round(miniOwned.slice(0, 10).reduce((sum, p) => sum + (Number(p.contractFee) || 0), 0) * 100) / 100;
+  const miniSet = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: ten });
+  assert.equal(miniSet.ok, true, `MINI SET_RETENTIONS failed: ${miniSet.error}`);
   miniState = mini.getState();
-  assert.equal(miniState.franchises[0].retentions.length, 15);
-  assert.equal(miniState.franchises[0].additionsLimit, miniState.config.maxAdditions, '15 retentions should leave the base additions cap');
-  assert.ok(miniState.franchises.slice(1).every((f) => f.retentions.length === 15), 'MINI AI franchises did not retain 15');
+  assert.equal(miniState.franchises[0].retentions.length, 10);
+  assert.equal(miniState.franchises[0].retentionSpent, miniCost, 'Mini retentions must use contract fees');
+  assert.ok(Math.abs(miniState.franchises[0].purse - (125 - miniCost)) < 0.001);
+  assert.ok(miniState.franchises.slice(1).every((f) => f.retentions.length > 0 && f.rtmCards === 0));
+  assert.ok(miniState.franchises[0].additionsLimit <= 15, 'ten retentions should reduce additions room');
 
-  const sixteenth = candidates.find((p) => !fifteen.includes(p.id));
-  const over = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: [...fifteen, sixteenth.id] });
-  assert.equal(over.ok, false, '16 MINI retentions should be rejected');
-  assert.match(over.error || '', /15|at most/i);
-
-  const zero = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: [] });
-  assert.equal(zero.ok, true, `MINI zero retentions failed: ${zero.error}`);
+  const allOwned = miniOwned.map((p) => p.id);
+  const allSet = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: allOwned });
+  assert.equal(allSet.ok, true, `retaining a full previous squad should be legal: ${allSet.error}`);
+  const zeroMini = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: [] });
+  assert.equal(zeroMini.ok, true);
   miniState = mini.getState();
-  assert.equal(miniState.franchises[0].additionsLimit, miniState.config.minSquad, 'zero retentions must permit reaching minSquad');
-  pass('MINI: 15-user-pick cap / candidate pool / zero retentions / additions cap adapts');
+  assert.ok(miniState.franchises[0].additionsLimit >= miniState.config.minSquad,
+    'zero retentions must permit reaching minSquad');
+  pass('2026 MINI: contract-fee retentions / no RTM / full squad / adaptive additionsLimit');
 
-  // ---- results totals include retention spend ----
-  const direct = AuctionEngine.create({ format: 'MEGA', config: CONFIG, persist: () => {} });
+  // ---- results totals and salary-cap reporting ----
+  const direct = AuctionEngine.create({ season: '2025', format: 'MEGA', config: CONFIG, persist: () => {} });
   direct.dispatch({ type: 'SET_RETENTIONS', playerIds: picks });
   const resultState = direct.getState();
   const results = computeResults(resultState);
   const totalRetention = resultState.franchises.reduce((sum, f) => sum + f.retentionSpent, 0);
-  assert.ok(Math.abs(results.totalRetentionSpending - totalRetention) < 0.001, 'result retention total mismatch');
+  assert.ok(Math.abs(results.totalRetentionSpending - totalRetention) < 0.001);
+  assert.equal(results.season, '2025');
+  assert.ok(results.matchFeeProjection > 0, 'match-fee projection missing');
+  assert.ok(results.cappedRetentions >= 5);
+  assert.ok(results.uncappedRetentions >= 1);
   for (const row of results.franchises) {
-    const source = resultState.franchises.find((f) => f.id === row.id);
-    assert.ok(Math.abs(row.purseSpent + row.purseRemaining - resultState.config.startingPurse) < 0.001,
+    assert.ok(Math.abs(row.purseSpent + row.purseRemaining - 120) < 0.001,
       `${row.id}: purseSpent + purseRemaining must equal starting purse`);
+    assert.equal(row.salaryCap, 146);
     for (const member of row.squad.filter((p) => p.source === 'EXISTING')) {
       assert.ok(member.price > 0, `${row.id}: retained player is missing its cost in results`);
     }
   }
-  pass('results: retention cost included in spending totals and squad prices');
+  pass('results: season rules, salary cap, retention totals and match-fee projection');
 
-  // ---- bid validation honours the retention-adjusted additions cap ----
-  const capped = AuctionEngine.create({ format: 'MINI', config: CONFIG, persist: () => {} });
-  capped.dispatch({ type: 'SET_RETENTIONS', playerIds: fifteen });
+  // ---- additions cap used by bid validation ----
+  const capped = AuctionEngine.create({ season: '2026', format: 'MINI', config: CONFIG, persist: () => {} });
+  capped.dispatch({ type: 'SET_RETENTIONS', playerIds: ten });
   const cappedState = clone(capped.getState());
   cappedState.phase = 'BIDDING';
   cappedState.currentPlayerId = cappedState.players.find((p) => p.availability === 'AVAILABLE' && !p.retentionCandidate).id;
@@ -561,15 +623,22 @@ async function scenarioRetentions() {
 
 async function scenarioMiniAuction() {
   const created = await act({
-    action: 'CREATE', format: 'MINI', difficulty: 'BALANCED', userFranchiseId: 'F1', config: CONFIG,
+    action: 'CREATE', season: '2026', format: 'MINI', difficulty: 'BALANCED', userFranchiseId: 'F1', config: CONFIG,
   });
   assert.equal(created.ok, true, `MINI CREATE failed: ${created.error}`);
+  assert.equal(created.state.season, '2026');
+  assert.equal(created.state.config.startingPurse, 125);
+  assert.equal(created.state.config.totalSalaryCap, 151);
+  assert.equal(created.state.config.overseasSalaryCap, 18);
   assert.ok(created.state.franchises.every((f) => f.squad.length === 0), 'MINI squads should start empty');
-  const picks = created.state.players.filter((p) => p.retentionCandidate)
-    .sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id)).slice(0, 15).map((p) => p.id);
+  const picks = created.state.players
+    .filter((p) => p.previousFranchiseId === 'F1' && p.retentionCandidate)
+    .sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id)).slice(0, 10).map((p) => p.id);
+  assert.equal(picks.length, 10, 'F1 needs ten previous-season contracts');
   const configured = await act({ action: 'SET_RETENTIONS', playerIds: picks });
   assert.equal(configured.ok, true, `MINI SET_RETENTIONS failed: ${configured.error}`);
   const retained = clone(configured.state.franchises.map((f) => [f.id, [...f.existing]]));
+  assert.equal(retained.find(([id]) => id === 'F1')[1].length, 10);
   const phases = new Set();
   let state = await driveHttp({ maxSteps: 240, stop: (s) => Boolean(s.currentPlayerId) && relevantPhases(s).has(s.phase), phasesSeen: phases });
   if (state.currentPlayerId) {
@@ -588,6 +657,9 @@ async function scenarioMiniAuction() {
       assert.ok(franchise.squad.includes(playerId), `${id} lost retained player ${playerId}`);
     }
   }
+  for (const phase of ['RTM_OFFER', 'RTM_COUNTER', 'RTM_MATCH']) {
+    assert.equal(phases.has(phase), false, `Mini Auction must never enter ${phase}`);
+  }
 
   // Direct validation of the additions cap on the real engine/validator.
   const ai = stubAi(async (ctx) => fallbackDecide(ctx));
@@ -602,7 +674,7 @@ async function scenarioMiniAuction() {
   const check = validateBid(capped.getState(), 'F1', amount);
   assert.equal(check.ok, false, 'bid past additionsLimit must be rejected');
   assert.match(check.error || '', /addition|squad|limit/i);
-  pass('MINI: user retentions persist through auction / additions cap enforced');
+  pass('2026 MINI: real purse/caps, own retentions persist, no RTM, additions cap enforced');
 }
 
 async function scenarioSaveResume() {
@@ -636,26 +708,23 @@ async function scenarioSaveResume() {
 
 async function scenarioAccelerationAndResults() {
   const phases = new Set();
-  // A zero-purse run makes every lot go unsold, which exercises both
-  // accelerated stages and the final unsold review over HTTP.
-  await act({
-    action: 'CREATE',
-    format: 'MEGA',
-    difficulty: 'HARD',
-    userFranchiseId: 'F1',
-    config: { ...CONFIG, startingPurse: 0, minReservePerSlot: 0 },
+  const created = await act({
+    action: 'CREATE', season: '2025', format: 'MEGA', difficulty: 'HARD', userFranchiseId: 'F1', config: CONFIG,
   });
-  const final = await driveHttp({ maxSteps: 5000, phasesSeen: phases });
+  assert.equal(created.ok, true, `MEGA CREATE failed: ${created.error}`);
+  const final = await driveHttp({ maxSteps: 6000, phasesSeen: phases });
   assert.equal(final.phase, 'COMPLETED', `HTTP run did not complete: ${final.phase}`);
   const unsold = final.players.filter((p) => p.availability === 'UNSOLD');
-  assert.ok(unsold.length > 0, 'expected some unsold players');
-  assert.ok(phases.has('ACCELERATED_AUCTION') || final.eventLog.some((e) => /accelerat/i.test(`${e.type} ${e.text}`))
-    || final.proceedings.some((s) => s.kind === 'ACCELERATED'), 'accelerated stage never appeared');
+  assert.ok(unsold.length > 0, 'expected some unsold players with 290 players and 10 squads');
+  assert.ok(final.proceedings.some((s) => s.kind === 'ACCELERATED')
+    || final.eventLog.some((e) => /accelerat/i.test(`${e.type} ${e.text}`)), 'accelerated stage never appeared');
   pass(`accelerated stage reached / ${unsold.length} unsold players exist`);
 
   const results = await request('/api/results');
   const source = results.ok ? results.results : computeResults(final);
+  assert.equal(source.season, '2025');
   assert.equal(source.franchises.length, 10);
+  assert.equal(source.salaryCap ?? source.franchises[0].salaryCap, 146);
   const totalSpent = source.franchises.reduce((sum, f) => sum + f.purseSpent, 0);
   assert.ok(Math.abs(totalSpent - source.totalAuctionSpending) < 0.001, 'spending totals inconsistent');
   for (const f of source.franchises) {
@@ -676,7 +745,7 @@ async function scenarioPacingAndEarlyBid() {
   // A human may raise a paddle during the introduction; the auctioneer then
   // opens the floor and recognises the bid instead of rejecting the click.
   const earlyEngine = AuctionEngine.create({
-    format: 'MEGA', difficulty: 'BALANCED', userFranchiseId: 'F1',
+    season: '2025', format: 'MEGA', difficulty: 'BALANCED', userFranchiseId: 'F1',
     config: { ...CONFIG, pace: 'BROADCAST' }, aiClient: passAi, persist: () => {},
   });
   earlyEngine.dispatch({ type: 'START' });
@@ -695,7 +764,7 @@ async function scenarioPacingAndEarlyBid() {
 
   // BROADCAST holds each call for several ticks so a person can react.
   const dwellEngine = AuctionEngine.create({
-    format: 'MEGA', difficulty: 'BALANCED', userFranchiseId: 'F1',
+    season: '2025', format: 'MEGA', difficulty: 'BALANCED', userFranchiseId: 'F1',
     config: { ...CONFIG, pace: 'BROADCAST' }, aiClient: passAi, persist: () => {},
   });
   dwellEngine.dispatch({ type: 'START' });
@@ -718,6 +787,226 @@ async function scenarioPacingAndEarlyBid() {
   pass('BROADCAST pace holds bidding for 5 ticks before Going Once');
 }
 
+async function scenarioRtmFlow() {
+  // Find a lot that belongs to the human franchise so it is offered the RTM.
+  const seed = AuctionEngine.create({
+    season: '2025', format: 'MEGA', userFranchiseId: 'F1', config: CONFIG, persist: () => {},
+  });
+  seed.dispatch({ type: 'START' });
+  const found = await driveEngine(seed, {
+    maxSteps: 400,
+    stop: (s) => {
+      const candidate = s.players.find((p) => p.id === s.currentPlayerId);
+      return Boolean(candidate && candidate.availability === 'AVAILABLE'
+        && candidate.previousFranchiseId === 'F1' && candidate.retentionCandidate
+        && (s.phase === 'PLAYER_INTRODUCTION' || relevantPhases(s).has(s.phase)));
+    },
+  });
+  const target = found.players.find((p) => p.id === found.currentPlayerId);
+  assert.ok(target, 'need a live lot previously contracted to F1');
+  const snapshot = clone(seed.getState());
+  const bid = Math.max(4, Math.round((Number(target.basePrice) || 1) * 2 * 100) / 100);
+  snapshot.phase = 'GOING_TWICE';
+  snapshot.phaseTicks = 0;
+  snapshot.currentBid = bid;
+  snapshot.bidsThisLot = 2;
+  snapshot.leaderId = 'F2';
+  snapshot.rtm = null;
+
+  const passAi = stubAi(() => ({ action: 'PASS', amount: 0, confidence: 0.3, publicComment: 'We hold.' }));
+  const rtmEngine = new AuctionEngine(snapshot, { aiClient: passAi, persist: () => {} });
+  const close = rtmEngine.dispatch({ type: 'NEXT' });
+  assert.equal(close.ok, true, `closing the lot failed: ${close.error}`);
+  let state = rtmEngine.getState();
+  assert.equal(state.phase, 'RTM_OFFER', 'a sold lot should first enter RTM_OFFER');
+  assert.equal(state.rtm.playerId, target.id);
+  assert.equal(state.rtm.originalFranchiseId, 'F1');
+  assert.equal(state.rtm.leaderFranchiseId, 'F2');
+  assert.equal(state.rtm.bid, bid);
+  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmCards, 6, 'the offer itself must not spend a card');
+
+  const wrong = rtmEngine.dispatch({ type: 'USE_RTM', franchiseId: 'F2' });
+  assert.equal(wrong.ok, false, 'a human must not decide for another franchise');
+  const used = rtmEngine.dispatch({ type: 'USE_RTM', franchiseId: 'F1' });
+  assert.equal(used.ok, true, `USE_RTM failed: ${used.error}`);
+  state = rtmEngine.getState();
+  assert.equal(state.phase, 'RTM_COUNTER');
+  assert.equal(state.rtm.usedCard, true);
+  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmCards, 5, 'USE_RTM spends exactly one card');
+  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmUsed, 1);
+
+  await rtmEngine.tick();
+  state = rtmEngine.getState();
+  assert.equal(state.phase, 'RTM_MATCH', 'AI counter/decline should open the final call');
+  assert.ok(state.rtm.log.some((entry) => entry.step === 'COUNTERED')
+    || state.rtm.log.some((entry) => entry.step === 'DECLINED'), 'counter step was not logged');
+  const finalPrice = state.rtm.price;
+  const matched = rtmEngine.dispatch({ type: 'MATCH_RTM', franchiseId: 'F1' });
+  assert.equal(matched.ok, true, `MATCH_RTM failed: ${matched.error}`);
+  state = rtmEngine.getState();
+  assert.equal(state.phase, 'SOLD');
+  const awarded = state.players.find((p) => p.id === target.id);
+  assert.equal(awarded.soldTo, 'F1');
+  assert.equal(awarded.soldPrice, finalPrice);
+  assert.ok(state.franchises.find((f) => f.id === 'F1').squad.includes(target.id));
+  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmCards, 5, 'matching must not spend a second card');
+  assert.ok(state.rtmLog.some((entry) => entry.playerId === target.id && entry.step === 'MATCHED'));
+  pass('2025 RTM: OFFER → COUNTER → MATCH, one card spent, player awarded at final price');
+
+  const passEngine = new AuctionEngine(snapshot, { aiClient: passAi, persist: () => {} });
+  passEngine.dispatch({ type: 'NEXT' });
+  assert.equal(passEngine.getState().phase, 'RTM_OFFER');
+  const passed = passEngine.dispatch({ type: 'PASS_RTM', franchiseId: 'F1' });
+  assert.equal(passed.ok, true, `PASS_RTM failed: ${passed.error}`);
+  state = passEngine.getState();
+  assert.equal(state.phase, 'SOLD');
+  assert.equal(state.players.find((p) => p.id === target.id).soldTo, 'F2');
+  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmCards, 6, 'passing must keep the card');
+  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmUsed, 0);
+  pass('2025 RTM: PASS_RTM awards the lot to the leader without spending a card');
+}
+
+async function scenarioSalaryAndSeasonOps() {
+  assert.deepEqual(salarySplit(25, true, '2025'), { bid: 25, salary: 25, welfare: 0, capped: false });
+  assert.deepEqual(salarySplit(25, true, '2026'), { bid: 25, salary: 18, welfare: 7, capped: true });
+  assert.deepEqual(salarySplit(25, false, '2026'), { bid: 25, salary: 25, welfare: 0, capped: false });
+  assert.deepEqual(salarySplit(20, true, '2027'), { bid: 20, salary: 18, welfare: 2, capped: true });
+  assert.equal(matchFeeProjection('2025'), 12.6, '₹7.5 lakh × 12 × 14');
+  pass('salary split / welfare diversion / match-fee projection match BCCI limits');
+
+  const season2027 = AuctionEngine.create({ season: '2027', format: 'MINI', config: CONFIG, persist: () => {} });
+  const rules27 = season2027.getState();
+  assert.equal(rules27.config.startingPurse, 130);
+  assert.equal(rules27.config.totalSalaryCap, 157);
+  assert.equal(rules27.config.overseasSalaryCap, 18);
+  assert.equal(rules27.config.maxRetentions, 25);
+  pass('2027 mini registry: ₹130 Cr purse / ₹157 Cr cap / ₹18 Cr overseas cap');
+
+  const base = AuctionEngine.create({ season: '2026', format: 'MINI', config: CONFIG, persist: () => {} });
+  base.dispatch({ type: 'START' });
+  await driveEngine(base, {
+    maxSteps: 120,
+    stop: (s) => Boolean(s.currentPlayerId) && (s.phase === 'PLAYER_INTRODUCTION' || relevantPhases(s).has(s.phase)),
+  });
+  const seed = base.getState();
+  assert.notEqual(seed.stageIndex, -1, 'need an active set before forcing a sale');
+  const available = seed.players.filter((p) => p.availability === 'AVAILABLE' && p.nationality && p.nationality !== 'India');
+  assert.ok(available.length >= 3, 'need overseas players in the RAPP for salary/trade checks');
+  const target = available[0];
+  const snapshot = clone(seed);
+  snapshot.phase = 'GOING_TWICE';
+  snapshot.phaseTicks = 0;
+  snapshot.currentPlayerId = target.id;
+  snapshot.currentBid = 25;
+  snapshot.bidsThisLot = 2;
+  snapshot.leaderId = 'F2';
+  snapshot.rtm = null;
+  const purseBefore = snapshot.franchises.find((f) => f.id === 'F2').purse;
+  const osSpendBefore = Number(snapshot.franchises.find((f) => f.id === 'F2').overseasSalarySpend) || 0;
+  const passAi = stubAi(() => ({ action: 'PASS', amount: 0, confidence: 0.3, publicComment: 'We hold.' }));
+  const engine = new AuctionEngine(snapshot, { aiClient: passAi, persist: () => {} });
+  const finalised = engine.dispatch({ type: 'NEXT' });
+  assert.equal(finalised.ok, true, `overseas lot failed: ${finalised.error}`);
+  let state = engine.getState();
+  const sold = state.players.find((p) => p.id === target.id);
+  assert.equal(sold.salary, 18, 'overseas salary must be capped at ₹18 Cr');
+  assert.equal(sold.welfareContribution, 7);
+  assert.equal(sold.purchasedInMini, true);
+  assert.equal(state.welfareFund, 7);
+  const f2 = state.franchises.find((f) => f.id === 'F2');
+  assert.equal(f2.welfareContribution, 7);
+  assert.equal(f2.overseasSalarySpend, osSpendBefore + 18);
+  assert.equal(f2.purse, purseBefore - 25, 'full bid debits the purse, not just the capped salary');
+  pass('2026 overseas lot: ₹18 Cr salary / ₹7 Cr to welfare / full bid debited');
+
+  const miniTrade = engine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F2', toFranchiseId: 'F3', givePlayerIds: [target.id], window: 'POST_AUCTION',
+  });
+  assert.equal(miniTrade.ok, false, 'a mini-auction signing cannot be traded post-auction');
+  assert.match(miniTrade.error || '', /mini auction/i);
+
+  const tradeable = f2.squad.find((id) => {
+    const p = state.players.find((candidate) => candidate.id === id);
+    return p && !p.purchasedInMini && !p.consentWithheld && p.availability === 'SOLD';
+  });
+  assert.ok(tradeable, 'F2 needs a retained player to trade');
+  const proposed = engine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F2', toFranchiseId: 'F3', givePlayerIds: [tradeable],
+    cash: 1, window: 'POST_SEASON', autoRespond: false,
+  });
+  assert.equal(proposed.ok, true, `EOI failed: ${proposed.error}`);
+  assert.equal(proposed.trade.status, 'PENDING_48H');
+  assert.equal(proposed.trade.approval, 'AWAITING_PLAYER_CONSENT');
+  state = engine.getState();
+  assert.ok(state.franchises.find((f) => f.id === 'F3').squad.indexOf(tradeable) === -1, 'EOI must not move the player');
+  const responded = engine.dispatch({ type: 'RESPOND_TRADE', tradeId: proposed.trade.id, accept: true });
+  assert.equal(responded.ok, true, `RESPOND_TRADE failed: ${responded.error}`);
+  state = engine.getState();
+  assert.equal(state.trades[0].status, 'APPROVED');
+  assert.ok(state.franchises.find((f) => f.id === 'F3').squad.includes(tradeable));
+  assert.ok(!state.franchises.find((f) => f.id === 'F2').squad.includes(tradeable));
+  assert.equal(state.players.find((p) => p.id === tradeable).previousFranchiseId, 'F3');
+  pass('trades: EOI stays 48h pending, RESPOND_TRADE moves player + cash with BCCI approval');
+
+  const consentSnapshot = clone(state);
+  consentSnapshot.players.find((p) => p.id === tradeable).consentWithheld = true;
+  const consentEngine = new AuctionEngine(consentSnapshot, { persist: () => {} });
+  const consentCheck = consentEngine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F3', toFranchiseId: 'F2', givePlayerIds: [tradeable], window: 'POST_SEASON',
+  });
+  assert.equal(consentCheck.ok, false, 'withheld player consent must block a trade');
+  assert.match(consentCheck.error || '', /consent/i);
+
+  const megaSetup = AuctionEngine.create({ season: '2025', format: 'MEGA', config: CONFIG, persist: () => {} });
+  const noWindow = megaSetup.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F2', givePlayerIds: ['P001'],
+  });
+  assert.equal(noWindow.ok, false, 'no trading is allowed immediately before a Mega Auction');
+  assert.match(noWindow.error || '', /Mega/i);
+  pass('trades: withheld consent blocked / no trade before a Mega Auction');
+
+  const injured = engine.dispatch({ type: 'INJURE_PLAYER', playerId: target.id });
+  assert.equal(injured.ok, true, `INJURE_PLAYER failed: ${injured.error}`);
+  state = engine.getState();
+  assert.equal(state.players.find((p) => p.id === target.id).availability, 'INJURED');
+  const replacements = state.players.filter((p) => p.availability === 'AVAILABLE' && p.id !== target.id);
+  assert.ok(replacements.length >= 2, 'need two RAPP players');
+  const purseBeforeReplacement = state.franchises.find((f) => f.id === 'F2').purse;
+  const signed = engine.dispatch({
+    type: 'SIGN_INJURY_REPLACEMENT', injuredPlayerId: target.id, replacementPlayerId: replacements[0].id, fee: 10,
+  });
+  assert.equal(signed.ok, true, `RAPP replacement failed: ${signed.error}`);
+  state = engine.getState();
+  assert.equal(state.players.find((p) => p.id === replacements[0].id).isRappReplacement, true);
+  assert.ok(state.franchises.find((f) => f.id === 'F2').squad.includes(replacements[0].id));
+  assert.equal(state.players.find((p) => p.id === target.id).replacedBy, replacements[0].id);
+  assert.equal(state.franchises.find((f) => f.id === 'F2').purse, purseBeforeReplacement, 'RAPP signing must not debit purse');
+  const tooDear = engine.dispatch({
+    type: 'SIGN_INJURY_REPLACEMENT', injuredPlayerId: target.id, replacementPlayerId: replacements[1].id, fee: 99,
+  });
+  assert.equal(tooDear.ok, false, 'replacement fee must respect the injured salary');
+  pass('RAPP: certified injury replacement within salary budget, no purse debit');
+
+  const withdrawn = engine.dispatch({ type: 'PLAYER_WITHDRAW', playerId: tradeable, certifiedInjury: false });
+  assert.equal(withdrawn.ok, true, `PLAYER_WITHDRAW failed: ${withdrawn.error}`);
+  state = engine.getState();
+  const withdrawnPlayer = state.players.find((p) => p.id === tradeable);
+  assert.equal(withdrawnPlayer.availability, 'WITHDRAWN');
+  assert.equal(withdrawnPlayer.banUntilSeason, '2028', '2026 withdrawal bans through 2028');
+  assert.ok(!state.franchises.find((f) => f.id === 'F3').squad.includes(tradeable));
+  pass('withdrawal: uncertified exit removes player and applies two-season ban');
+
+  const results = computeResults(state);
+  assert.equal(results.season, '2026');
+  assert.equal(results.welfareFund, 7);
+  assert.ok(results.injuries.some((entry) => entry.playerId === target.id && entry.status === 'INJURED'));
+  assert.ok(results.injuries.some((entry) => entry.playerId === tradeable && entry.status === 'WITHDRAWN'
+    && entry.banUntilSeason === '2028'));
+  assert.ok(results.trades.length >= 1);
+  assert.equal(results.tradeWindows.length, 2);
+  pass('results: season rules, welfare, trades and injury/withdrawal reporting');
+}
+
 async function main() {
   // Sanity-check the other agents' modules before starting processes.
   assert.equal(generatePlayers().length >= 140, true, 'generatePlayers() should create >=140 players');
@@ -726,6 +1015,8 @@ async function main() {
   try {
     await scenarioPacingAndEarlyBid();
     await scenarioRetentions();
+    await scenarioRtmFlow();
+    await scenarioSalaryAndSeasonOps();
     await startChildren();
     await scenarioCreateAndIntro();
     await scenarioHumanBid();

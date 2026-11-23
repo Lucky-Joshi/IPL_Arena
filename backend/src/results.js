@@ -2,11 +2,19 @@
  * Deterministic post-auction analytics. Pure function: never mutates state.
  */
 
+import { rulesFor } from './rules.js';
+import { tradeWindows } from './season-ops.js';
+
 const ROLES = ['BATTER', 'BOWLER', 'ALLROUNDER', 'WICKETKEEPER'];
 const IDEAL_SHARE = { BATTER: 0.36, BOWLER: 0.34, ALLROUNDER: 0.2, WICKETKEEPER: 0.1 };
 
 function round1(value) {
   return Math.round((Number.isFinite(value) ? value : 0) * 10) / 10;
+}
+
+/** Bid increments are in paise, so money needs two decimals to stay additive. */
+function money(value) {
+  return Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
 }
 
 function clamp(value, min, max) {
@@ -44,7 +52,7 @@ function enrichedSquad(state, franchise) {
       if (!player) return null;
       const source = existing.has(id) ? 'EXISTING' : 'PURCHASED';
       const price = source === 'EXISTING'
-        ? (retentionByPlayer.get(id) ?? Number(player.retentionCost) ?? 0)
+        ? (retentionByPlayer.get(id) ?? (Number(player.retentionCost) || 0))
         : (prices.get(id) || 0);
       return { ...player, stats: { ...player.stats }, source, price };
     })
@@ -63,7 +71,10 @@ export function computeResults(state) {
   const players = state?.players || [];
   const purchases = purchaseRows(state);
 
-  const sold = players.filter((player) => player.availability === 'SOLD' && Number(player.soldPrice) > 0);
+  // Retained players are resolved at a retention cost rather than an auction
+  // price; they still count as sold for the called-lot totals.
+  const sold = players.filter((player) => player.availability === 'SOLD'
+    && (Number(player.soldPrice) > 0 || player.retained === true));
   const unsold = players.filter((player) => player.availability === 'UNSOLD');
   const rows = franchises.map((franchise) => {
     const squad = enrichedSquad(state, franchise);
@@ -75,7 +86,13 @@ export function computeResults(state) {
     const purchased = franchise.purchases || [];
     const retentionSpent = Number(franchise.retentionSpent) || 0;
     const auctionSpent = purchased.reduce((total, purchase) => total + (Number(purchase.price) || 0), 0);
-    const purseSpent = round1(retentionSpent + auctionSpent);
+    const purseSpent = money(retentionSpent + auctionSpent);
+    const salaryCap = Number(config.totalSalaryCap) || 0;
+    const overseasSalaryCap = Number(config.overseasSalaryCap) || 0;
+    const overseasSalarySpend = money(franchise.overseasSalarySpend || 0);
+    const salaryHeadroom = money(Math.max(0, salaryCap - purseSpent));
+    const retentionCappedCount = (franchise.retentions || []).filter((entry) => entry.capped !== false).length;
+    const retentionUncappedCount = (franchise.retentions || []).length - retentionCappedCount;
     const avgRating = squad.length
       ? squad.reduce((total, player) => total + (Number(player.rating) || 0), 0) / squad.length
       : 0;
@@ -94,9 +111,9 @@ export function computeResults(state) {
     const thinnestRole = ROLES.slice().sort((a, b) => roleCounts[a] - roleCounts[b] || ROLES.indexOf(a) - ROLES.indexOf(b))[0];
     let rankReason = `Balance ${balanceScore}, average rating ${round1(avgRating)}; strongest at ${strongestRole.toLowerCase()}, thinnest at ${thinnestRole.toLowerCase()}.`;
     rankReason += purchased.length
-      ? ` ${purchased.length} addition(s) for ₹${round1(auctionSpent)} Cr.`
+      ? ` ${purchased.length} addition(s) for ₹${money(auctionSpent)} Cr.`
       : ' No auction purchases.';
-    if (retentionSpent > 0) rankReason += ` ₹${round1(retentionSpent)} Cr committed to retentions.`;
+    if (retentionSpent > 0) rankReason += ` ₹${money(retentionSpent)} Cr committed to retentions.`;
 
     return {
       id: franchise.id,
@@ -105,13 +122,24 @@ export function computeResults(state) {
       primary: franchise.primary,
       owner: franchise.owner,
       purseSpent,
-      purseRemaining: round1(franchise.purse),
+      purseRemaining: money(franchise.purse),
       playerCount: squad.length,
       existingCount: (franchise.existing || []).length,
       purchasedCount: purchased.length,
       retentionCount: (franchise.retentions || []).length,
-      retentionSpent: round1(retentionSpent),
+      retentionSpent: money(retentionSpent),
+      retentionCappedCount,
+      retentionUncappedCount,
       overseasCount,
+      salaryCap,
+      salaryHeadroom,
+      overseasSalaryCap,
+      overseasSalarySpend,
+      overseasSalaryHeadroom: money(Math.max(0, overseasSalaryCap - overseasSalarySpend)),
+      welfareContribution: money(franchise.welfareContribution || 0),
+      rtmCards: Number(franchise.rtmCards) || 0,
+      rtmUsed: Number(franchise.rtmUsed) || 0,
+      tradeCount: (franchise.trades || []).length,
       roleCounts,
       squad,
       balanceScore,
@@ -128,22 +156,47 @@ export function computeResults(state) {
 
   const biggestPurchases = purchases.slice().sort((a, b) => b.price - a.price || a.playerId.localeCompare(b.playerId))
     .slice(0, 5)
-    .map(({ playerId, name, price, franchiseId, franchiseName }) => ({ playerId, name, price: round1(price), franchiseId, franchiseName }));
+    .map(({ playerId, name, price, franchiseId, franchiseName }) => ({ playerId, name, price: money(price), franchiseId, franchiseName }));
 
   const bestValue = purchases.slice()
     .map((row) => ({ ...row, valueScore: round1(row.rating / Math.max(0.2, row.price)) }))
     .sort((a, b) => b.valueScore - a.valueScore || b.rating - a.rating || a.playerId.localeCompare(b.playerId))
     .slice(0, 5)
-    .map(({ playerId, name, price, rating, franchiseId, valueScore }) => ({ playerId, name, price: round1(price), rating, franchiseId, valueScore }));
+    .map(({ playerId, name, price, rating, franchiseId, valueScore }) => ({ playerId, name, price: money(price), rating, franchiseId, valueScore }));
 
   const retentionSpending = (state?.franchises || [])
     .reduce((total, franchise) => total + (Number(franchise.retentionSpent) || 0), 0);
+  const seasonKey = state?.season || '2025';
+  const rules = rulesFor(seasonKey, state?.format);
+  const cappedRetentions = rows.reduce((total, row) => total + row.retentionCappedCount, 0);
+  const uncappedRetentions = rows.reduce((total, row) => total + row.retentionUncappedCount, 0);
+  const rtmUsed = rows.reduce((total, row) => total + row.rtmUsed, 0);
+  const trades = Array.isArray(state?.trades) ? state.trades : [];
+  const injuries = players.filter((player) => player.injured || player.withdrawn)
+    .map((player) => ({
+      playerId: player.id,
+      name: player.name,
+      status: player.injured ? 'INJURED' : 'WITHDRAWN',
+      banUntilSeason: player.banUntilSeason || null,
+      replacedBy: player.replacedBy || null,
+    }));
 
   return {
     generatedAt: new Date().toISOString(),
-    format: state?.format || 'MEGA',
-    totalAuctionSpending: round1(purchases.reduce((total, row) => total + row.price, 0) + retentionSpending),
-    totalRetentionSpending: round1(retentionSpending),
+    season: seasonKey,
+    seasonLabel: rules.label,
+    format: rules.format,
+    rules: { ...rules },
+    matchFeeProjection: Number(state?.matchFeeProjection) || 0,
+    welfareFund: money(state?.welfareFund || 0),
+    totalAuctionSpending: money(purchases.reduce((total, row) => total + row.price, 0) + retentionSpending),
+    totalRetentionSpending: money(retentionSpending),
+    cappedRetentions,
+    uncappedRetentions,
+    rtmUsed,
+    trades,
+    tradeWindows: tradeWindows(),
+    injuries,
     soldCount: sold.length,
     unsoldCount: unsold.length,
     biggestPurchases,

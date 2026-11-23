@@ -1,8 +1,8 @@
 # IPL Auction Arena
 
-A complete, playable IPL-style franchise auction simulator. Ten franchises bid in one shared auction room;
-you control one of them, and nine autonomous AI management teams evaluate every lot against their own
-squads, purses and strategies.
+A playable IPL auction simulator following the **BCCI IPL Player Regulations 2025–2027**. Ten franchises
+share one authoritative auction room: you control one of them, and nine autonomous AI management teams
+bid, retain, trade and rebuild against their own contracts, squads and strategies.
 
 ## Services
 
@@ -12,13 +12,15 @@ squads, purses and strategies.
 | Backend (authoritative engine) | `backend/` | 4000 | Node.js, zero dependencies |
 | AI decision engine | `ai/` | 5000 | Python 3 standard library |
 
-The frontend never changes a purse or squad directly. Every bid, sale, break and stage transition passes
-through the Node engine, which validates human and AI bids with the same rules and persists the state to
-`backend/data/auction-state.json`. The Python service is stateless: it receives only public auction
-information and returns a bid decision plus a short public commentary line. Private valuations never
-leave the AI service.
+The frontend never changes a purse, squad or contract directly. Every bid, retention, trade, replacement,
+break and stage transition goes through the Node engine, which validates human and AI decisions with the
+same rules and persists the state to `backend/data/auction-state.json`. The Python service is stateless:
+it receives only public auction information and returns a bid decision plus a short public commentary line.
+Private valuations never leave the AI service.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the exact state schema and HTTP/AI contracts.
+The BCCI limits live in `backend/src/rules.js`, the single source of truth for the season cycle. Setup may
+tune only pacing (`tickMs`, `pace`) and a reserve-per-slot; all financial and squad limits come from the
+season registry. See [ARCHITECTURE.md](ARCHITECTURE.md) for exact schemas and contracts.
 
 ## Run
 
@@ -33,64 +35,88 @@ cd backend && node server.js
 cd frontend && npm install && npm run dev
 ```
 
-The backend works even if the AI service is momentarily unavailable: it falls back to a local heuristic so
-a live auction never deadlocks.
+The backend falls back to a local heuristic if the AI service is briefly unavailable, so a live auction
+never deadlocks.
 
-## Auction formats
+## Season cycle (BCCI 2025–2027)
 
-- **Mega Auction** — ₹120 Cr each, 18–25 players, max 8 overseas, up to **3 retentions**.
-- **Mini Auction** — ₹50 Cr each, up to **15 retentions** from a dedicated existing-player pool. Your
-  auction-addition cap adapts: **18 additions with zero retentions**, falling to **6** once you retain 12
-  or more. Both formats allow starting from **zero retentions**.
+| Season | Format | Auction purse | Total salary cap | Overseas salary cap | Retentions | RTM |
+|---|---|---:|---:|---:|---|---|
+| **2025** | Mega | ₹120 Cr | ₹146 Cr | — | max 6 (5 capped + 2 uncapped) | 6 − direct retentions |
+| **2026** | Mini | ₹125 Cr | ₹151 Cr | ₹18 Cr | unlimited within squad/purse at existing fees | none |
+| **2027** | Mini | ₹130 Cr | ₹157 Cr | ₹18 Cr | unlimited within squad/purse at existing fees | none |
 
-Purse, squad limits, additions and retention count are configurable in setup. After you create an auction
-you choose your retentions before the first lot: nothing is predefined by the system. The nine AI franchises
-then auto-pick their own retentions from what remains, using their strategies and role needs.
+Shared squad rules: **18–25 players**, **max 8 overseas**, **4 overseas in the Playing XI including the
+Impact Player**, **₹7.5 lakh match fee** per playing member (₹12.6 Cr projected for 14 league matches),
+and registration base prices of **₹0.3–2 Cr**. Retention charges use five capped slabs
+(₹18/14/11/18/14 Cr) and ₹4 Cr for uncapped players. The 2025 Mega uses two marquee sets; Mini auctions
+have no marquee set and no RTM.
 
-Both formats include marquee/role sets, auctioneer commentary, genuine multi-franchise bidding wars,
-strategy breaks, an accelerated round for unsold players, management discussions, squad inspection,
-optional browser speech narration, autosave/resume, and a full final report.
+### 2025 Mega retentions
 
-## Retentions
+Retain only players from your own previous-season contract list. The ordered capped retention charges are
+₹18 / ₹14 / ₹11 / ₹18 / ₹14 Cr; an uncapped retention costs ₹4 Cr. You may directly retain at most six,
+with at most five capped and at most two uncapped. Every direct retention consumes one of your six RTM
+cards; the rest stay available during the auction.
 
-Retentions are paid for out of your purse at confirmation, using a rating slab:
+If another franchise wins a lot that previously belonged to you, the auction enters a real three-step RTM
+phase: `RTM_OFFER` (use or pass) → `RTM_COUNTER` (raise or decline) → `RTM_MATCH` (match or let it go).
+`USE_RTM` spends exactly one card; passing and matching do not. A successful match awards the player at the
+final price.
 
-| Rating | Cost | Rating | Cost |
-|---:|---:|---:|---:|
-| 90+ | ₹5 Cr | 75–79 | ₹2 Cr |
-| 85–89 | ₹4 Cr | 70–74 | ₹1.5 Cr |
-| 80–84 | ₹3 Cr | below 70 | ₹1 Cr |
+### 2026/2027 Mini retentions
 
-The picker shows the running cost and your projected purse as you select players, and you can clear the
-selection or start with zero. You can re-open and change your picks any time before `START`; doing so
-restores every player and purse and recomputes the AI retentions. Retained players count towards your squad
-and their cost is debited from the purse before bidding begins. The same rules apply to all ten franchises.
+Mini auctions keep all eligible previous-season contracts at their **existing contract fees** — there is no
+fixed retention count and no rating slab. Retained players are not mini-auction signings and may be traded
+in the post-auction window. Your additions limit adapts to the retained squad size, while the full bid (not
+just the capped salary) is debited from the purse.
 
-## Bidding as the human franchise
+### Overseas salary cap and welfare fund
 
-You control one of the ten franchises; the other nine run their own AI war rooms. Setup defaults to
-**BROADCAST** pace, where each lot stays on screen for roughly five seconds per call and rival teams pause
-before answering. That gives you time to watch the room and bid like a real representative.
+A Mini auction overseas player can earn at most ₹18 Cr. Any bid above that still costs the franchise the
+full bid amount, but the excess is diverted to the **BCCI player welfare fund** and reported separately for
+each team and in the final review. Mega auctions have no overseas salary ceiling.
 
-- You can bid the moment a player is introduced — the auctioneer opens the floor and recognises your bid.
-- The gold **BID ₹X Cr** button shows the exact next legal amount. Press **B** anywhere as a shortcut.
-- A live countdown shows when the current call is closing; the button turns red at the final call.
-- Press **W** to withdraw while you are an active bidder. Pause the clock at any time if you need a break.
-- Your bid can never break purse, squad, overseas or reserve rules: the same `validateBid` runs for humans
-  and AI teams, and a successful bid produces a confirmation toast.
+## Auction floor
 
-Choose **CINEMATIC** for even longer calls, or **FAST** only if you want a quick automated run.
+- Setup offers 2025 Mega, 2026 Mini and 2027 Mini; choose your home franchise and pace.
+- Pick retentions (or start from zero) before the first lot; AI franchises apply a complete ordered plan
+  at once so capped slabs and RTM cards stay correct. Re-selection restores players and purses.
+- **BROADCAST** is the default: roughly five seconds per call so you can read the room. **CINEMATIC** is
+  slower; **FAST** is for automated runs.
+- You can bid the moment a player is introduced — the auctioneer opens the floor and recognises the bid.
+  The gold **BID ₹X Cr** button shows the next legal amount, with **B** as a shortcut; **W** withdraws from
+  an active lot.
+- The same `validateBid` checks human and AI bids: purse, salary/squad/overseas caps, minimum-squad reserve,
+  player availability and phase.
+- Accelerated shortlists re-offer unsold players; strategy breaks, management discussions, squad inspection,
+  optional browser narration, autosave/resume and a full final report are included.
+
+## Trades, injuries and withdrawals
+
+- Two windows: **post-season** (closes one week before the auction; no trading immediately before a Mega)
+  and **post-auction** (opens the day after the auction; mini-auction signings cannot be traded).
+- A trade begins as an EOI and stays pending for 48 hours with player consent required. Player swaps and
+  cash adjustments are supported; `RESPOND_TRADE` approves and executes the move.
+- A certified injury lets a franchise sign a replacement from the Registered Available Player Pool (RAPP)
+  within the injured player's salary, without debiting the purse.
+- An uncertified pre-season withdrawal removes the player and applies a ban for up to two seasons.
 
 ## Tests
 
 ```bat
 cd backend && npm test
-cd ai && python -m unittest test_ai.py
+python -m unittest discover -s ai -p "test_*.py"
 cd frontend && npm run build
 ```
 
-`backend/scripts/smoke-test.js` boots isolated AI + backend processes and drives complete mega and mini
-auctions over HTTP, checking bid validation, early human bids during introduction, BROADCAST dwell timing,
-multi-bidder wars, break restoration, mini addition limits, save/resume and final results. It also covers
-retentions: rating-slab costs, purse debit, AI auto-pick, re-selection resets, the 3/15 caps, the zero-pick
-option, MINI's candidate pool, retention-adjusted addition caps and retention-inclusive result totals.
+Or run all three with `cmd /c verify.cmd`.
+
+`backend/scripts/smoke-test.js` boots isolated AI and backend processes and drives complete Mega and Mini
+auctions over HTTP. It covers real season finances, own-contract retentions and capped/uncapped slabs,
+RTM offer/counter/match and pass flows, salary splitting and the welfare fund, overseas cap, trades and
+consent, RAPP replacements, withdrawal bans, early human bids, BROADCAST dwell timing, bidding wars,
+breaks, save/resume, accelerated rounds and final results.
+
+`ai/test_ai.py` (18 tests) verifies season context, capped/uncapped status and contract fees, overseas
+salary-cap decisions, RTM context, role/purse/age behaviour and the HTTP contract.

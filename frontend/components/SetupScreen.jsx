@@ -5,50 +5,29 @@ import { useRouter } from 'next/navigation';
 import { getState, postAction } from '../lib/api';
 import { catalogueFromState } from '../lib/franchises';
 import {
+  cappedLabel,
   cr,
   formatDateTime,
+  isUncapped,
   phaseLabel,
-  retentionCost,
   retentionLimit,
+  retentionPlan,
   roleColour,
   roleLabel,
   ROLES,
+  SEASON_OPTIONS,
+  seasonOption,
   strategyLabel,
 } from '../lib/format';
 
+// Only these four values are tunable. Purse, squad, salary and retention
+// limits come from the authoritative BCCI season registry on the backend.
 const DEFAULT_CONFIG = {
-  startingPurse: 120,
-  minSquad: 18,
-  maxSquad: 25,
-  maxOverseas: 8,
-  maxAdditions: 6,
   minReservePerSlot: 0.2,
+  maxAdditions: 6,
   tickMs: 1000,
   pace: 'BROADCAST',
 };
-
-const FORMATS = [
-  {
-    id: 'MEGA',
-    label: 'MEGA AUCTION',
-    kicker: 'The full rebuild',
-    rules: [
-      'Retain up to 3 players before the first lot, or start from zero.',
-      'Every retention is costed by rating and deducted from your purse.',
-      'Marquee, role-based and accelerated sets follow the 15-stage proceedings.',
-    ],
-  },
-  {
-    id: 'MINI',
-    label: 'MINI AUCTION',
-    kicker: 'Retain and refine',
-    rules: [
-      'Retain up to 15 existing players, or start from zero.',
-      'You pick the squad — nothing is predefined by the system.',
-      'Retention costs come out of the purse before bidding begins.',
-    ],
-  },
-];
 
 const DIFFICULTIES = [
   { id: 'RELAXED', label: 'RELAXED', detail: 'Conservative rival bids — room to build your squad.' },
@@ -94,7 +73,7 @@ function NumberField({ label, value, onChange, min, max, step, hint, disabled })
 
 export default function SetupScreen() {
   const router = useRouter();
-  const [format, setFormat] = useState('MEGA');
+  const [season, setSeason] = useState('2025');
   const [difficulty, setDifficulty] = useState('BALANCED');
   const [selectedId, setSelectedId] = useState('F1');
   const [config, setConfig] = useState(DEFAULT_CONFIG);
@@ -106,6 +85,9 @@ export default function SetupScreen() {
   const [selectedRetentionIds, setSelectedRetentionIds] = useState([]);
   const [retentionRole, setRetentionRole] = useState('ALL');
   const [retentionFeedback, setRetentionFeedback] = useState('');
+
+  const seasonDetails = seasonOption(season);
+  const format = seasonDetails.format;
 
   useEffect(() => {
     let active = true;
@@ -126,15 +108,23 @@ export default function SetupScreen() {
   const catalogue = useMemo(() => catalogueFromState(saved?.state), [saved?.state]);
   const selected = catalogue.find((entry) => entry.id === selectedId) || catalogue[0];
 
-  // During SETUP every sold player was sold by a retention, and re-confirming
-  // resets all ten franchises first. Show the whole eligible pool regardless of
-  // current availability so "Change retentions" can re-pick any candidate.
+  // Retentions can only come from this franchise's own previous-season
+  // contracts. Show the full pool regardless of availability so "Change
+  // retentions" can re-pick any of them after a reset.
   const retentionPool = useMemo(() => {
     if (!created) return [];
     return (created.players || []).filter((player) => (
-      created.format === 'MINI' ? Boolean(player.retentionCandidate) : !player.retentionCandidate
+      Boolean(player.retentionCandidate) && player.previousFranchiseId === created.userFranchiseId
     ));
   }, [created]);
+
+  // Capped retention slabs are assigned in selection order, so put the best
+  // players first. The same ordered list is sent to the backend and used for
+  // the live cost preview.
+  const orderedSelection = useMemo(() => {
+    const byRating = new Map((created?.players || []).map((player) => [player.id, Number(player.rating) || 0]));
+    return [...selectedRetentionIds].sort((a, b) => (byRating.get(b) || 0) - (byRating.get(a) || 0));
+  }, [created, selectedRetentionIds]);
 
   const setConfigValue = (key, raw) => {
     const value = key === 'pace' ? raw : raw === '' ? '' : Number(raw);
@@ -143,18 +133,9 @@ export default function SetupScreen() {
 
   const validate = () => {
     const values = config;
-    if (!Number.isFinite(Number(values.startingPurse)) || Number(values.startingPurse) <= 0) {
-      return 'Starting purse must be greater than zero.';
-    }
-    if (Number(values.minSquad) < 1) return 'Minimum squad size must be at least 1.';
-    if (Number(values.maxSquad) < Number(values.minSquad)) {
-      return 'Maximum squad size cannot be below the minimum.';
-    }
-    if (Number(values.maxOverseas) < 0 || Number(values.maxOverseas) > Number(values.maxSquad)) {
-      return 'Overseas limit must be between 0 and the maximum squad size.';
-    }
+    if (!SEASON_OPTIONS.some((option) => option.key === season)) return 'Choose a BCCI season.';
     if (format === 'MINI') {
-      if (Number(values.maxAdditions) < 1 || Number(values.maxAdditions) > Number(values.maxSquad)) {
+      if (Number(values.maxAdditions) < 1 || Number(values.maxAdditions) > seasonDetails.maxRetentions) {
         return 'Mini additions must be between 1 and the maximum squad size.';
       }
     }
@@ -169,13 +150,15 @@ export default function SetupScreen() {
     setError('');
     try {
       const result = await postAction(action, {
+        season,
         format,
         difficulty,
         userFranchiseId: selectedId,
         config: {
-          ...config,
-          maxAdditions:
-            format === 'MINI' ? Number(config.maxAdditions) || 0 : Number(config.maxSquad) || 25,
+          tickMs: Number(config.tickMs) || 1000,
+          pace: config.pace,
+          minReservePerSlot: Number(config.minReservePerSlot) || 0,
+          maxAdditions: format === 'MINI' ? Number(config.maxAdditions) || 6 : 25,
         },
       });
       if (action === 'CREATE') {
@@ -216,25 +199,43 @@ export default function SetupScreen() {
     }
   };
 
+  const retentionProblem = (ids) => {
+    const plan = retentionPlan(created, ids);
+    const rules = created?.rules || seasonOption(created?.season);
+    if (plan.overLimit) return `You can retain at most ${retentionLimit(created)} players.`;
+    if (plan.overCapped) return `A Mega Auction allows at most ${rules.maxCappedRetentions || 5} capped retentions.`;
+    if (plan.overUncapped) return `A Mega Auction allows at most ${rules.maxUncappedRetentions || 2} uncapped retentions.`;
+    const overseas = plan.entries.filter((entry) => isUncapped(entry.player) === false && entry.player.nationality && entry.player.nationality !== 'India').length;
+    if (overseas > (Number(created?.config?.maxOverseas) || 8)) return `Retentions would exceed the overseas limit of ${created?.config?.maxOverseas || 8}.`;
+    return '';
+  };
+
   const toggleRetention = (id) => {
     setRetentionFeedback('');
     if (selectedRetentionIds.includes(id)) {
       setSelectedRetentionIds((current) => current.filter((entry) => entry !== id));
       return;
     }
-    if (selectedRetentionIds.length >= retentionMax) {
-      setRetentionFeedback(`You can retain at most ${retentionMax} player${retentionMax === 1 ? '' : 's'}.`);
+    const nextIds = [...selectedRetentionIds, id];
+    const problem = retentionProblem(nextIds);
+    if (problem) {
+      setRetentionFeedback(problem);
       return;
     }
-    setSelectedRetentionIds((current) => [...current, id]);
+    setSelectedRetentionIds(nextIds);
   };
 
   const handleConfirmRetentions = async () => {
+    const problem = retentionProblem(orderedSelection);
+    if (problem) {
+      setRetentionFeedback(problem);
+      return;
+    }
     setBusy(true);
     setError('');
     setRetentionFeedback('');
     try {
-      const result = await postAction('SET_RETENTIONS', { playerIds: selectedRetentionIds });
+      const result = await postAction('SET_RETENTIONS', { playerIds: orderedSelection });
       setCreated(result.state);
       setRetentionStep('review');
     } catch (err) {
@@ -251,11 +252,12 @@ export default function SetupScreen() {
   };
 
   const createdMine = created?.franchises?.find((entry) => entry.id === created.userFranchiseId);
+  const plan = retentionPlan(created, orderedSelection);
   const retentionMax = retentionLimit(created);
-  const runningCost = selectedRetentionIds.reduce((total, id) => {
-    const player = retentionPool.find((entry) => entry.id === id) || created?.players?.find((entry) => entry.id === id);
-    return total + (player ? retentionCost(player) : 0);
-  }, 0);
+  const runningCost = plan.total;
+  const isMegaAuction = (created?.rules?.format || created?.format || format) === 'MEGA';
+  const maxCapped = Number(created?.rules?.maxCappedRetentions) || 5;
+  const maxUncapped = Number(created?.rules?.maxUncappedRetentions) || 2;
   // On first pick the purse is untouched; after "Change retentions" it already
   // has the previous spend removed, so add it back before projecting the new cost.
   const basePurse = Number(createdMine?.purse ?? created?.config?.startingPurse ?? 0)
@@ -289,10 +291,11 @@ export default function SetupScreen() {
         </div>
         <div className="hero-board" aria-hidden="true">
           <div className="hero-board-title">AUCTION CONTROL</div>
+          <div className="hero-board-line"><span>SEASON</span><strong>{seasonDetails.label}</strong></div>
           <div className="hero-board-line"><span>FORMAT</span><strong>{format}</strong></div>
           <div className="hero-board-line"><span>DIFFICULTY</span><strong>{difficulty}</strong></div>
           <div className="hero-board-line"><span>PACE</span><strong>{config.pace}</strong></div>
-          <div className="hero-board-line"><span>PURSE</span><strong>{cr(config.startingPurse)}</strong></div>
+          <div className="hero-board-line"><span>PURSE</span><strong>{cr(seasonDetails.startingPurse)}</strong></div>
           <div className="hero-board-line"><span>YOUR TEAM</span><strong>{selected?.short || '—'}</strong></div>
           <div className="hero-board-glow" />
         </div>
@@ -310,7 +313,7 @@ export default function SetupScreen() {
             <span className="eyebrow">SAVED AUCTION FOUND</span>
             <h2>Pick up where you left off</h2>
             <p>
-              {saved.state.format} · {saved.state.difficulty} · {phaseLabel(saved.state.phase)} ·
+              {saved.state.rules?.label || `IPL ${saved.state.season || '2025'}`} · {saved.state.difficulty} · {phaseLabel(saved.state.phase)} ·
               last saved {formatDateTime(saved.state.savedAt)}
             </p>
           </div>
@@ -331,25 +334,25 @@ export default function SetupScreen() {
         <div className="section-heading">
           <span className="step-number">01</span>
           <div>
-            <h2>Choose the format</h2>
-            <p>The two formats have different squads, sets and proceedings.</p>
+            <h2>Choose the BCCI season</h2>
+            <p>One Mega followed by two Mini Auctions. Financial and squad limits are fixed by the regulations.</p>
           </div>
         </div>
         <div className="format-grid">
-          {FORMATS.map((item) => (
+          {SEASON_OPTIONS.map((item) => (
             <button
-              key={item.id}
+              key={item.key}
               type="button"
-              className={`format-card ${format === item.id ? 'is-selected' : ''}`}
-              onClick={() => setFormat(item.id)}
-              aria-pressed={format === item.id}
+              className={`format-card ${season === item.key ? 'is-selected' : ''}`}
+              onClick={() => setSeason(item.key)}
+              aria-pressed={season === item.key}
             >
               <span className="format-kicker">{item.kicker}</span>
               <strong>{item.label}</strong>
               <ul>
                 {item.rules.map((rule) => <li key={rule}>{rule}</li>)}
               </ul>
-              <span className="selection-mark">{format === item.id ? 'SELECTED' : 'SELECT'}</span>
+              <span className="selection-mark">{season === item.key ? 'SELECTED' : 'SELECT'}</span>
             </button>
           ))}
         </div>
@@ -436,23 +439,25 @@ export default function SetupScreen() {
         <div className="section-heading">
           <span className="step-number">05</span>
           <div>
-            <h2>Auction rules</h2>
-            <p>Every limit is enforced by the backend for human and AI bidders alike.</p>
+            <h2>Authorised rules &amp; pace controls</h2>
+            <p>Financial limits are set by the BCCI season registry and enforced for human and AI bidders alike.</p>
           </div>
         </div>
+        <div className="rules-board">
+          <div><span>SEASON</span><strong>{seasonDetails.label}</strong></div>
+          <div><span>STARTING PURSE</span><strong>{cr(seasonDetails.startingPurse)}</strong></div>
+          <div><span>TOTAL SALARY CAP</span><strong>{cr(seasonDetails.totalSalaryCap)}</strong></div>
+          <div><span>OVERSEAS SALARY CAP</span><strong>{seasonDetails.overseasSalaryCap ? cr(seasonDetails.overseasSalaryCap) : 'No ceiling (Mega)'}</strong></div>
+          <div><span>SQUAD</span><strong>18–25 · max 8 overseas</strong></div>
+          <div><span>RETENTIONS / RTM</span><strong>{format === 'MEGA' ? '6 max · 6 − retentions RTM cards' : 'At contract fee · no RTM'}</strong></div>
+          <div><span>MARQUEE SETS</span><strong>{format === 'MEGA' ? 2 : 0}</strong></div>
+          <div><span>MATCH FEE</span><strong>₹7.5 lakh per Playing XI member incl. Impact Player</strong></div>
+        </div>
         <div className="config-grid">
-          <NumberField label="Starting purse (₹ Cr)" value={config.startingPurse} min={1} step={0.5}
-            onChange={(value) => setConfigValue('startingPurse', value)} hint="Purse for every franchise" />
-          <NumberField label="Minimum squad" value={config.minSquad} min={1} step={1}
-            onChange={(value) => setConfigValue('minSquad', value)} hint="Squad slots that must be filled" />
-          <NumberField label="Maximum squad" value={config.maxSquad} min={1} step={1}
-            onChange={(value) => setConfigValue('maxSquad', value)} hint="MEGA squad ceiling" />
-          <NumberField label="Overseas limit" value={config.maxOverseas} min={0} step={1}
-            onChange={(value) => setConfigValue('maxOverseas', value)} hint="Non-Indian players allowed" />
-          <NumberField label="Mini additions" value={config.maxAdditions} min={0} step={1}
+          <NumberField label="Mini additions" value={config.maxAdditions} min={1} max={25} step={1}
             disabled={format !== 'MINI'}
             onChange={(value) => setConfigValue('maxAdditions', value)}
-            hint={format === 'MINI' ? 'New players allowed in MINI' : 'MEGA uses maximum squad'} />
+            hint={format === 'MINI' ? 'New players allowed in MINI' : 'Fixed at 25 for MEGA'} />
           <NumberField label="Reserve per slot (₹ Cr)" value={config.minReservePerSlot} min={0} step={0.1}
             onChange={(value) => setConfigValue('minReservePerSlot', value)}
             hint="Money held back for empty slots" />
@@ -463,8 +468,8 @@ export default function SetupScreen() {
         <div>
           <h2>Ready for the call?</h2>
           <p>
-            Creating the auction saves it in SETUP. You will choose your retentions next, then
-            review every squad before the first player is introduced.
+            Creating the auction saves it in SETUP. You will retain only players from your own
+            previous-season contract list, then review every squad before the first player is introduced.
           </p>
         </div>
         <div className="launch-actions">
@@ -491,15 +496,26 @@ export default function SetupScreen() {
             {retentionStep === 'pick' ? (
               <div className="modal-body">
                 <p className="modal-lead">
-                  <strong>{createdMine?.name || 'Your franchise'}</strong> may retain up to{' '}
-                  <strong>{retentionMax}</strong> player{retentionMax === 1 ? '' : 's'} from the{' '}
-                  {created.format === 'MINI' ? 'existing-squad' : 'auction'} pool. Each retention costs
-                  a rating slab and comes straight out of your purse. Keeping zero is allowed.
+                  <strong>{createdMine?.name || 'Your franchise'}</strong> can only retain players from its
+                  own previous-season contract list.{' '}
+                  {isMegaAuction ? (
+                    <>
+                      Up to <strong>{retentionMax}</strong> in total — at most <strong>{maxCapped}</strong> capped
+                      (₹18/14/11/18/14 Cr in selection order) and <strong>{maxUncapped}</strong> uncapped (₹4 Cr each).
+                      Every unused slot leaves a Right to Match card.
+                    </>
+                  ) : (
+                    <>Keep as many as you like at their existing contract fees. There is no Right to Match in a Mini Auction.</>
+                  )}
                 </p>
 
                 <div className="retention-meter">
-                  <div><span>SELECTED</span><strong>{selectedRetentionIds.length}/{retentionMax}</strong></div>
+                  <div><span>SELECTED</span><strong>{plan.entries.length}{isMegaAuction ? `/${retentionMax}` : ''}</strong></div>
+                  {isMegaAuction && (
+                    <div><span>CAPPED / UNCAPPED</span><strong>{plan.cappedCount}/{maxCapped} · {plan.uncappedCount}/{maxUncapped}</strong></div>
+                  )}
                   <div><span>RETENTION COST</span><strong>{cr(runningCost)}</strong></div>
+                  <div><span>RTM CARDS</span><strong>{plan.rtmCards}</strong></div>
                   <div><span>PURSE AFTER</span><strong>{cr(projectedPurse)}</strong></div>
                 </div>
 
@@ -526,7 +542,10 @@ export default function SetupScreen() {
                 <div className="retention-list">
                   {visibleCandidates.map((player) => {
                     const picked = selectedRetentionIds.includes(player.id);
-                    const maxed = selectedRetentionIds.length >= retentionMax && !picked;
+                    const maxed = !picked && selectedRetentionIds.length >= retentionMax;
+                    const indicative = plan.entries.find((entry) => entry.playerId === player.id)
+                      || retentionPlan(created, [...orderedSelection, player.id]).entries
+                        .find((entry) => entry.playerId === player.id);
                     return (
                       <button
                         key={player.id}
@@ -539,13 +558,14 @@ export default function SetupScreen() {
                         <span className="retention-check">{picked ? '✓' : ''}</span>
                         <span className="retention-name">
                           <strong>{player.name}</strong>
-                          <small>{player.id} · {player.nationality}</small>
+                          <small>{player.id} · {player.nationality} · fee {cr(player.contractFee)}</small>
                         </span>
+                        <span className="retention-status">{cappedLabel(player)}</span>
                         <span className="retention-role" style={{ '--role-colour': roleColour(player.role) }}>
                           {roleLabel(player.role)}
                         </span>
                         <span className="retention-rating">{player.rating}</span>
-                        <span className="retention-price">{cr(retentionCost(player))}</span>
+                        <span className="retention-price">{cr(indicative?.cost || 0)}</span>
                       </button>
                     );
                   })}
@@ -559,7 +579,8 @@ export default function SetupScreen() {
                   {confirmedRetentions.length === 1 ? '' : 's'} cost{' '}
                   <strong>{cr(Number(createdMine?.retentionSpent || 0))}</strong>. The nine rivals have
                   locked their own picks from what remained. Remaining purse:{' '}
-                  <strong>{cr(createdMine?.purse)}</strong>.
+                  <strong>{cr(createdMine?.purse)}</strong>.{' '}
+                  {isMegaAuction && <>You hold <strong>{Number(createdMine?.rtmCards) || 0}</strong> Right to Match card{Number(createdMine?.rtmCards) === 1 ? '' : 's'}.</>}
                 </p>
 
                 <h3 className="modal-subhead">Your retained squad</h3>
@@ -573,7 +594,8 @@ export default function SetupScreen() {
                         <div>
                           {rows.map((row) => (
                             <span key={row.playerId} className="preview-player">
-                              {row.player?.name || row.playerId} <small>{cr(row.cost)}</small>
+                              {row.player?.name || row.playerId}{' '}
+                              <small>{row.capped === false ? 'Uncapped · ' : 'Capped · '}{cr(row.cost)}</small>
                             </span>
                           ))}
                         </div>

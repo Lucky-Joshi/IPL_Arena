@@ -3571,6 +3571,139 @@ small {
   }
 }
 
+/* ---------- BCCI season rules, RTM and reporting ---------- */
+
+.rules-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.rules-board > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.rules-board span {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.rules-board strong {
+  color: var(--gold-soft);
+  font-size: 0.98rem;
+  line-height: 1.35;
+}
+
+.retention-meter {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.retention-player {
+  grid-template-columns: 22px minmax(0, 1fr) auto auto auto auto;
+}
+
+.retention-status {
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.retention-player.is-selected .retention-status {
+  border-color: var(--gold-dim);
+  color: var(--gold-soft);
+}
+
+.rtm-panel {
+  margin: 0 0 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--gold-dim);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.12), var(--panel-2));
+}
+
+.rtm-panel.is-my-turn {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px rgba(212, 175, 55, 0.18);
+}
+
+.rtm-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rtm-heading span {
+  color: var(--gold-soft);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.rtm-heading strong {
+  color: var(--gold);
+  font-size: 1.4rem;
+}
+
+.rtm-detail {
+  margin: 8px 0 4px;
+  font-size: 0.9rem;
+}
+
+.rtm-turn {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.rtm-turn.is-mine {
+  color: var(--gold-soft);
+  font-weight: 700;
+}
+
+.results-rule-note {
+  margin-top: 6px !important;
+  color: var(--gold-soft) !important;
+  font-size: 0.82rem !important;
+  letter-spacing: 0.02em;
+}
+
+.event-rtm { border-left-color: var(--gold); }
+.event-rtm .event-icon { color: var(--gold); }
+.event-trade { border-left-color: #55b7e8; }
+.event-trade .event-icon { color: #55b7e8; }
+.event-injury { border-left-color: var(--red); }
+.event-injury .event-icon { color: var(--red); }
+
+@media (max-width: 700px) {
+  .retention-player {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+  }
+
+  .retention-status,
+  .retention-rating {
+    display: none;
+  }
+
+  .rtm-heading strong {
+    font-size: 1.15rem;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

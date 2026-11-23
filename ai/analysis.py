@@ -92,6 +92,27 @@ def normalize_format(value: object) -> str:
     return "MINI" if text == "MINI" else "MEGA"
 
 
+def normalize_season(value: object, fmt: str) -> str:
+    """Resolve a BCCI season key, falling back to the auction format."""
+    text = str(value or "").strip()
+    if text in ("2025", "2026", "2027"):
+        return text
+    return "2026" if fmt == "MINI" else "2025"
+
+
+def capped_status(player: dict) -> dict:
+    """BCCI capped/uncapped status, with safe defaults for older test fixtures."""
+    capped_value = player.get("capped")
+    capped = True if capped_value is None else bool(capped_value)
+    return {
+        "capped": capped,
+        "uncapped": not capped,
+        "reason": player.get("uncappedReason") or "",
+        "contract_fee": max(0.0, num(player.get("contractFee"))),
+        "previous_franchise_id": player.get("previousFranchiseId") or "",
+    }
+
+
 def nationality_of(player: dict) -> str:
     for key in ("nationality", "country", "nation"):
         text = player.get(key)
@@ -323,6 +344,9 @@ def analyze(ctx: dict) -> dict:
     player = as_dict(context.get("player"))
     difficulty = normalize_difficulty(context.get("difficulty"))
     fmt = normalize_format(context.get("format"))
+    season = normalize_season(context.get("season"), fmt)
+    rules = as_dict(context.get("rules"))
+    status = capped_status(player)
 
     profile = squad_profile(self_info.get("squad"))
     gaps = role_gaps(profile, config)
@@ -334,9 +358,27 @@ def analyze(ctx: dict) -> dict:
     competition = competition_pressure(auction, self_info, context.get("others"), max(0.0, next_bid))
     engaged = engagement(auction, self_info)
 
+    # In Mini Auctions an overseas salary above ₹18 Cr is diverted to the BCCI
+    # welfare fund, so it does not increase the player's value to the squad.
+    cap_value = rules.get("overseasSalaryCap", config.get("overseasSalaryCap"))
+    overseas_cap = max(0.0, num(cap_value))
+    is_overseas_player = overseas["overseas_player"]
+    salary_blocked = is_overseas_player and overseas_cap > 0
+    salary_spend = max(0.0, num(self_info.get("overseasSalarySpend")))
+    salary_ceiling = max(0.0, overseas_cap) if salary_blocked else 0.0
+
     return {
         "difficulty": difficulty,
         "format": fmt,
+        "season": season,
+        "status": status,
+        "overseas_salary": {
+            "cap": overseas_cap,
+            "spend": round(salary_spend, 4),
+            "effective_ceiling": salary_ceiling,
+            "salary_blocked": salary_blocked,
+            "rtm": as_dict(auction.get("rtm")) or None,
+        },
         "player": player,
         "player_id": str(player.get("id") or ""),
         "role": role,

@@ -204,6 +204,10 @@ def value_player(analysis: dict) -> dict:
 
     base = rating_value(rating)
     role_adj = ROLE_FACTOR.get(role_info["role"], 1.0)
+    # Uncapped players cost less in retention and carry no international
+    # commitment, so a small stable premium reflects that extra flexibility.
+    status = analysis["status"]
+    status_adj = 1.06 if status["uncapped"] else 1.0
     age_adj = age_factor(player.get("age"))
     stat_adj = stats_factor(player, role_info["role"])
     category_adj = CATEGORY_FACTOR.get(
@@ -226,6 +230,7 @@ def value_player(analysis: dict) -> dict:
     fair = (
         base
         * role_adj
+        * status_adj
         * age_adj
         * stat_adj
         * category_adj
@@ -240,6 +245,11 @@ def value_player(analysis: dict) -> dict:
 
     plan = analysis["purse"]
     ceiling = round(min(fair, num(plan.get("spendable"))), 3)
+    # Anything above the overseas salary ceiling goes to the welfare fund, so
+    # it has no squad value and must not drive the AI's private ceiling.
+    salary = analysis["overseas_salary"]
+    if salary["salary_blocked"] and salary["effective_ceiling"] > 0:
+        ceiling = round(min(ceiling, salary["effective_ceiling"]), 3)
 
     next_bid = analysis["next_bid"]
     headroom = clamp((ceiling - next_bid) / max(0.5, ceiling)) if ceiling > 0 else 0.0
@@ -268,6 +278,7 @@ def value_player(analysis: dict) -> dict:
         "persona": persona,
         "factors": {
             "role": role_adj,
+            "status": status_adj,
             "age": round(age_adj, 4),
             "stats": round(stat_adj, 4),
             "category": category_adj,

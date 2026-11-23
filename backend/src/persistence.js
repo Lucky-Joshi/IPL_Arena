@@ -3,16 +3,24 @@ import path from 'node:path';
 
 const PHASES = new Set([
   'SETUP', 'OPENING', 'PLAYER_INTRODUCTION', 'BIDDING', 'GOING_ONCE', 'GOING_TWICE',
+  'RTM_OFFER', 'RTM_COUNTER', 'RTM_MATCH',
   'SOLD', 'UNSOLD', 'SET_BREAK', 'STRATEGY_BREAK', 'ACCELERATED_AUCTION',
   'FINAL_REVIEW', 'COMPLETED',
 ]);
-const REQUIRED_ARRAYS = ['players', 'franchises', 'proceedings', 'eventLog', 'conversations'];
+const REQUIRED_ARRAYS = [
+  'players', 'franchises', 'proceedings', 'eventLog', 'conversations',
+  'bidHistory', 'nominations',
+];
 const CONFIG_NUMBERS = [
   'startingPurse', 'minSquad', 'maxSquad', 'maxOverseas', 'maxAdditions',
   'minReservePerSlot', 'tickMs',
 ];
-// Older saves predate retentions; accept them and let the engine normalise.
-const OPTIONAL_CONFIG_NUMBERS = ['maxRetentions'];
+// Older saves predate retentions and the BCCI season rules; normalise them.
+const OPTIONAL_CONFIG_NUMBERS = [
+  'maxRetentions', 'maxCappedRetentions', 'maxUncappedRetentions',
+  'totalSalaryCap', 'overseasSalaryCap', 'matchFee',
+];
+const OPTIONAL_STATE_NUMBERS = ['welfareFund', 'matchFeeProjection'];
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -35,6 +43,11 @@ export function validateState(state) {
   for (const key of OPTIONAL_CONFIG_NUMBERS) {
     if (state.config[key] !== undefined && !isFiniteNumber(state.config[key])) {
       throw new Error(`config.${key} is not a finite number`);
+    }
+  }
+  for (const key of OPTIONAL_STATE_NUMBERS) {
+    if (state[key] !== undefined && !isFiniteNumber(state[key])) {
+      throw new Error(`${key} is not a finite number`);
     }
   }
   for (const key of REQUIRED_ARRAYS) {

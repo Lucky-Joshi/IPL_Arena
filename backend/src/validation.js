@@ -45,7 +45,7 @@ function overseasCount(state, franchise) {
  * Capacity, overseas-slot and financial-reserve checks for adding `player`.
  * The prospective price is the next bid (or base price on the first bid).
  */
-export function canFranchiseHoldPlayer(state, franchiseId, player) {
+export function canFranchiseHoldPlayer(state, franchiseId, player, amountOverride) {
   if (!state || typeof state !== 'object') return fail('Auction state is unavailable');
   const franchise = findFranchise(state, franchiseId);
   if (!franchise) return fail(`Franchise ${franchiseId} was not found`);
@@ -72,9 +72,11 @@ export function canFranchiseHoldPlayer(state, franchiseId, player) {
     return fail(`${franchise.name || franchiseId} has no overseas slot left`);
   }
 
-  const amount = Number(state.currentBid) > 0
-    ? getNextBid(state.currentBid)
-    : Number(player.basePrice) || 0;
+  const amount = Number.isFinite(Number(amountOverride))
+    ? Number(amountOverride)
+    : Number(state.currentBid) > 0
+      ? getNextBid(state.currentBid)
+      : Number(player.basePrice) || 0;
   const remainingMinSlots = isMini ? 0 : Math.max(0, minSquad - squad.length);
   const requiredReserve = remainingMinSlots * reservePerSlot;
   if (Number(franchise.purse) - amount < requiredReserve - EPSILON) {

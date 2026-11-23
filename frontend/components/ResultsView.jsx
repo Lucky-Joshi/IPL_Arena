@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { postAction } from '../lib/api';
-import { cr, formatDateTime, isOverseas, roleColour, roleLabel, ROLES } from '../lib/format';
+import { cappedLabel, cr, formatDateTime, isOverseas, roleColour, roleLabel, ROLES, seasonLabel } from '../lib/format';
 
 function SummaryCard({ label, value, detail }) {
   return (
@@ -50,9 +50,10 @@ export default function ResultsView({ results }) {
     <div className="results-view">
       <section className="results-hero">
         <div>
-          <span className="eyebrow">FINAL REPORT · {results.format} AUCTION</span>
+          <span className="eyebrow">FINAL REPORT · {seasonLabel(results)} · {results.format} AUCTION</span>
           <h1>Auction results</h1>
           <p>Generated {formatDateTime(results.generatedAt)} · every squad, purse and ranking verified.</p>
+          {results.rules?.auctionNote && <p className="results-rule-note">{results.rules.auctionNote}</p>}
         </div>
         <div className="results-hero-badge">COMPLETE</div>
       </section>
@@ -65,6 +66,10 @@ export default function ResultsView({ results }) {
         <SummaryCard label="PLAYERS SOLD" value={results.soldCount ?? 0} detail="Hammered in the room" />
         <SummaryCard label="UNSOLD" value={results.unsoldCount ?? 0} detail="Left in the pool" />
         <SummaryCard label="FRANCHISES" value={franchises.length} detail="Fully audited squads" />
+        <SummaryCard label="WELFARE FUND" value={cr(results.welfareFund)} detail="Overseas bids above the ₹18 Cr salary cap" />
+        <SummaryCard label="MATCH FEES" value={cr(results.matchFeeProjection)} detail="Playing XI + Impact Player, league stage" />
+        <SummaryCard label="RTM USED" value={results.rtmUsed ?? 0} detail="Right to Match cards exercised" />
+        <SummaryCard label="RETENTIONS" value={`${results.cappedRetentions ?? 0} / ${results.uncappedRetentions ?? 0}`} detail="Capped / uncapped" />
       </section>
 
       <section className="panel ranking-panel">
@@ -74,7 +79,8 @@ export default function ResultsView({ results }) {
             <thead>
               <tr>
                 <th>Rank</th><th>Franchise</th><th>Spent</th><th>Remaining</th>
-                <th>Squad</th><th>Overseas</th><th>Score</th><th>Assessment</th>
+                <th>Squad</th><th>Overseas</th><th>Cap left</th><th>Welfare</th><th>RTM</th>
+                <th>Score</th><th>Assessment</th>
               </tr>
             </thead>
             <tbody>
@@ -85,7 +91,10 @@ export default function ResultsView({ results }) {
                   <td>{cr(entry.purseSpent)}</td>
                   <td>{cr(entry.purseRemaining)}</td>
                   <td>{entry.playerCount} <small>({entry.purchasedCount} new)</small></td>
-                  <td>{entry.overseasCount}</td>
+                  <td>{entry.overseasCount} <small>/ 8</small></td>
+                  <td>{cr(entry.salaryHeadroom)} <small>of {cr(entry.salaryCap)}</small></td>
+                  <td>{cr(entry.welfareContribution)}</td>
+                  <td>{entry.rtmCards ?? 0} left · {entry.rtmUsed ?? 0} used</td>
                   <td><strong>{entry.balanceScore ?? '—'}</strong></td>
                   <td><span className="rank-reason">{entry.rankReason || '—'}</span></td>
                 </tr>
@@ -140,6 +149,11 @@ export default function ResultsView({ results }) {
               <div className="squad-report-body">
                 <div className="squad-report-stats">
                   <span>Remaining {cr(entry.purseRemaining)}</span>
+                  <span>Cap left {cr(entry.salaryHeadroom)} / {cr(entry.salaryCap)}</span>
+                  <span>Overseas salary {cr(entry.overseasSalarySpend)} / {entry.overseasSalaryCap ? cr(entry.overseasSalaryCap) : 'no cap'}</span>
+                  <span>Retained {entry.retentionCappedCount} capped · {entry.retentionUncappedCount} uncapped</span>
+                  <span>RTM {entry.rtmCards} left · {entry.rtmUsed} used</span>
+                  <span>Welfare fund {cr(entry.welfareContribution)}</span>
                   <span>Overseas {entry.overseasCount}</span>
                   <span>Score {entry.balanceScore}</span>
                 </div>
@@ -152,19 +166,21 @@ export default function ResultsView({ results }) {
                 </div>
                 <div className="table-wrap">
                   <table className="report-table compact">
-                    <thead><tr><th>Player</th><th>Role</th><th>Country</th><th>Source</th><th>Price</th></tr></thead>
+                    <thead><tr><th>Player</th><th>Role</th><th>Country</th><th>Status</th><th>Source</th><th>Price</th><th>Salary</th></tr></thead>
                     <tbody>
                       {(entry.squad || []).map((player) => (
                         <tr key={player.id}>
                           <td><strong>{player.name}</strong><small>rating {player.rating}</small></td>
                           <td>{roleLabel(player.role)}</td>
                           <td>{player.nationality}{isOverseas(player) ? ' (OS)' : ''}</td>
+                          <td>{cappedLabel(player)}</td>
                           <td>
                             <span className={`source-badge source-${String(player.source || 'EXISTING').toLowerCase()}`}>
                               {player.source || 'EXISTING'}
                             </span>
                           </td>
                           <td>{player.source === 'PURCHASED' ? cr(player.price) : '—'}</td>
+                          <td>{cr(player.salary ?? player.price ?? 0)}{Number(player.welfareContribution) > 0 && <small> + {cr(player.welfareContribution)} welfare</small>}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -198,6 +214,44 @@ export default function ResultsView({ results }) {
         </div>
       </section>
 
+      <div className="report-columns">
+        <section className="panel">
+          <div className="panel-heading"><h3>Trade windows &amp; deals</h3><span className="panel-tag">{results.trades?.length || 0} DEALS</span></div>
+          <ul className="report-list">
+            {(results.tradeWindows || []).map((window) => (
+              <li key={window.id}>
+                <span className="report-list-main"><strong>{window.label}</strong><small>{window.detail}</small></span>
+              </li>
+            ))}
+            {(results.trades || []).map((trade) => (
+              <li key={trade.id}>
+                <span className="report-list-main">
+                  <strong>{trade.status || 'PROPOSED'}</strong>
+                  <small>{trade.fromFranchiseId} → {trade.toFranchiseId} · {trade.window || 'POST_SEASON'}</small>
+                </span>
+                <span className="source-badge">{trade.accepted ? 'ACCEPTED' : 'PENDING'}</span>
+              </li>
+            ))}
+            {!results.trades?.length && <li className="report-empty">No trades were registered.</li>}
+          </ul>
+        </section>
+
+        <section className="panel">
+          <div className="panel-heading"><h3>Injuries &amp; withdrawals</h3><span className="panel-tag">RAPP / BAN</span></div>
+          <ul className="report-list">
+            {(results.injuries || []).map((player) => (
+              <li key={player.playerId}>
+                <span className="report-list-main">
+                  <strong>{player.name}</strong>
+                  <small>{player.status}{player.banUntilSeason ? ` · banned through ${player.banUntilSeason}` : ''}{player.replacedBy ? ` · replaced by ${player.replacedBy}` : ''}</small>
+                </span>
+              </li>
+            ))}
+            {!results.injuries?.length && <li className="report-empty">No injury replacements or withdrawals.</li>}
+          </ul>
+        </section>
+      </div>
+
       <section className="panel final-summary">
         <div className="panel-heading"><h3>Final summary</h3><span className="panel-tag">THE CALL</span></div>
         <p>
@@ -207,6 +261,8 @@ export default function ResultsView({ results }) {
           {ranked[0] && <> <strong>{ranked[0].name}</strong> tops the rankings — {ranked[0].rankReason || 'the best-balanced squad in the room'}.</>}
           {topSpender && <> The biggest spender was <strong>{topSpender.name}</strong> at {cr(topSpender.purseSpent)}.</>}
           {bestBalance && <> The highest balance score went to <strong>{bestBalance.name}</strong> ({bestBalance.balanceScore}).</>}
+          {' '}Right to Match was exercised <strong>{results.rtmUsed ?? 0}</strong> time{results.rtmUsed === 1 ? '' : 's'}, and{' '}
+          <strong>{cr(results.welfareFund)}</strong> reached the BCCI player welfare fund from overseas bids above the salary cap.
         </p>
       </section>
 

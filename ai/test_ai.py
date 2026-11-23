@@ -1,5 +1,9 @@
 """Standard-library test suite for the IPL Auction Arena AI service.
 
+The fixtures mirror the BCCI IPL Player Regulations 2025–2027: capped and
+uncapped player status, existing contract fees, Right to Match context and the
+₹18 Cr overseas salary cap in Mini Auctions.
+
 Run from the workspace root:
 
     python ai/test_ai.py
@@ -34,6 +38,10 @@ def player(**overrides: object) -> dict:
         "role": "BATTER",
         "subtype": "Top order",
         "rating": 72,
+        "capped": True,
+        "uncappedReason": None,
+        "contractFee": 6.5,
+        "previousFranchiseId": "F7",
         "basePrice": 2,
         "category": "BATTER",
         "stats": {
@@ -82,14 +90,20 @@ def make_ctx(**overrides: object) -> dict:
         "requestId": "req-test-1",
         "difficulty": "BALANCED",
         "format": "MEGA",
+        "season": "2025",
+        "rules": {
+            "totalSalaryCap": 146, "overseasSalaryCap": 0,
+            "rtmAvailable": True, "matchFee": 0.075,
+        },
         "config": {
             "startingPurse": 120, "minSquad": 18, "maxSquad": 25,
             "maxOverseas": 8, "minReservePerSlot": 0.2,
+            "overseasSalaryCap": 0,
         },
         "player": player(),
         "auction": {
             "currentBid": 0, "nextBid": 2, "leaderId": None, "bidsThisLot": 0,
-            "stageKind": "SET", "accelerated": False,
+            "stageKind": "SET", "accelerated": False, "rtm": None,
             "availableByRole": {
                 "BATTER": 12, "BOWLER": 10, "ALLROUNDER": 8, "WICKETKEEPER": 5,
             },
@@ -97,6 +111,7 @@ def make_ctx(**overrides: object) -> dict:
         "self": {
             "id": "F1", "purse": 34.5, "squad": bowler_short_squad(),
             "additionsUsed": 2, "maxAdditions": 6, "overseasCount": 2,
+            "overseasSalarySpend": 12.0, "rtmCards": 4,
             "strategy": "BALANCED", "isLeader": False, "withdrawn": False,
             "rejected": [],
         },
@@ -278,6 +293,89 @@ class DecisionContractTests(unittest.TestCase):
             decision = make_decision(ctx)
             if decision["action"] == "BID":
                 self.assertEqual(decision["amount"], bid)
+
+
+class BcciRulesTests(unittest.TestCase):
+    def test_season_and_salary_cap_context(self):
+        mega = analyze(make_ctx(season="2025", format="MEGA"))
+        self.assertEqual(mega["season"], "2025")
+        self.assertEqual(mega["format"], "MEGA")
+        self.assertEqual(mega["overseas_salary"]["cap"], 0)
+        self.assertFalse(mega["overseas_salary"]["salary_blocked"])
+
+        mini26 = analyze(make_ctx(season="2026", format="MINI"))
+        self.assertEqual(mini26["season"], "2026")
+        self.assertEqual(mini26["format"], "MINI")
+
+        mini27 = analyze(make_ctx(
+            season="2027",
+            format="MINI",
+            player=player(nationality="Australia"),
+            rules={"overseasSalaryCap": 18},
+            config={"overseasSalaryCap": 18},
+        ))
+        self.assertEqual(mini27["season"], "2027")
+        self.assertEqual(mini27["overseas_salary"]["cap"], 18)
+        self.assertTrue(mini27["overseas_salary"]["salary_blocked"])
+
+    def test_capped_status_and_contract_fee(self):
+        capped = make_ctx(player=player(capped=True, contractFee=9))
+        uncapped = make_ctx(player=player(
+            capped=False, contractFee=2, uncappedReason="U19 World Cup"
+        ))
+        capped_status = analyze(capped)["status"]
+        uncapped_status = analyze(uncapped)["status"]
+
+        self.assertTrue(capped_status["capped"])
+        self.assertFalse(capped_status["uncapped"])
+        self.assertEqual(capped_status["contract_fee"], 9)
+        self.assertFalse(uncapped_status["capped"])
+        self.assertTrue(uncapped_status["uncapped"])
+        self.assertEqual(uncapped_status["reason"], "U19 World Cup")
+        self.assertEqual(uncapped_status["previous_franchise_id"], "F7")
+        # Uncapped flexibility is a small, stable valuation premium.
+        self.assertGreater(
+            value_player(analyze(uncapped))["fair_value"],
+            value_player(analyze(capped))["fair_value"],
+        )
+
+    def test_overseas_salary_cap_blocks_uncapped_value(self):
+        ctx = make_ctx(
+            season="2026",
+            format="MINI",
+            rules={"overseasSalaryCap": 18},
+            config={"overseasSalaryCap": 18},
+            player=player(
+                nationality="Australia", role="BOWLER", category="BOWLER",
+                capped=True, rating=94,
+            ),
+            self={"overseasCount": 2, "overseasSalarySpend": 5, "purse": 60},
+            auction={
+                "nextBid": 20, "currentBid": 19.5, "leaderId": "F2", "bidsThisLot": 2,
+            },
+        )
+        analysis = analyze(ctx)
+        self.assertTrue(analysis["overseas_salary"]["salary_blocked"])
+        self.assertEqual(analysis["overseas_salary"]["effective_ceiling"], 18)
+        self.assertLessEqual(value_player(analysis)["ceiling"], 18)
+        self.assertNotEqual(decide(ctx)["action"], "BID")
+
+    def test_right_to_match_context_is_available(self):
+        rtm = {
+            "phase": "RTM_OFFER",
+            "playerId": "P001",
+            "originalFranchiseId": "F7",
+            "leaderFranchiseId": "F2",
+            "price": 8.0,
+        }
+        analysis = analyze(make_ctx(auction={"rtm": rtm}, self={"rtmCards": 4}))
+        self.assertEqual(analysis["overseas_salary"]["rtm"], rtm)
+        self.assertIsNone(analyze(make_ctx())["overseas_salary"]["rtm"])
+        result = decide(make_ctx(auction={"rtm": rtm}, self={"rtmCards": 4}))
+        self.assertEqual(
+            set(result),
+            {"action", "amount", "confidence", "publicComment", "privateReason"},
+        )
 
 
 class HttpServerTests(unittest.TestCase):

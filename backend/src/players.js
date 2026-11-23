@@ -6,6 +6,8 @@
  * players, which keeps auctions reproducible in tests and demos.
  */
 
+import { basePriceForRating, resolveSeason } from './rules.js';
+
 export const PLAYER_SEED = 20240331;
 
 const CATEGORY_PLAN = [
@@ -272,11 +274,58 @@ function acceleratedRole(rng) {
 }
 
 /**
+ * BCCI status for a generated player.
+ *
+ * Overseas players are capped. An Indian is capped when they have appeared in
+ * international cricket; players who have not played international cricket for
+ * five calendar years and hold no BCCI central contract are reclassified as
+ * uncapped. `contractFee` is the player's previous league salary and is what a
+ * Mini Auction retention costs.
+ */
+export function statusFor({ rating, age, experience, nationality, rng, forceUncapped = false }) {
+  const overseas = Boolean(nationality && nationality !== 'India');
+  const quality = Number(rating) || 60;
+  const years = Number(experience) || 0;
+  const ageYears = Number(age) || 27;
+  const random = typeof rng === 'function' ? rng : Math.random;
+
+  let internationalCaps = 0;
+  if (!overseas && !forceUncapped) {
+    if (quality >= 88) internationalCaps = 18 + Math.floor(random() * 70);
+    else if (quality >= 76) internationalCaps = 1 + Math.floor(random() * 14);
+  } else if (overseas) {
+    internationalCaps = 12 + Math.floor(random() * 70);
+  }
+  const centralContract = !forceUncapped && internationalCaps > 0 && quality >= 85 && ageYears <= 34;
+  const retiredFiveYears = !overseas && internationalCaps === 0 && ageYears >= 34 && years >= 10;
+  const capped = internationalCaps > 0 || centralContract;
+  const uncappedReason = capped ? null
+    : retiredFiveYears ? 'NO_INTERNATIONAL_CRICKET_5_YEARS'
+      : 'NO_INTERNATIONAL_CAPS';
+
+  let contractFee;
+  if (capped) {
+    contractFee = Math.min(18, Math.max(0.5, 0.5 + ((quality - 58) / 40) * 12 + random() * 2));
+  } else {
+    contractFee = Math.min(4, Math.max(0.3, 0.3 + ((quality - 50) / 40) * 3 + random() * 0.5));
+  }
+  return {
+    capped,
+    uncappedReason,
+    internationalCaps,
+    centralContract,
+    retiredFiveYears,
+    contractFee: Math.round(contractFee * 100) / 100,
+  };
+}
+
+/**
  * Build the complete auction pool.
  * @param {number|string} [seed] defaults to PLAYER_SEED
+ * @param {string} [season] BCCI season key; controls base-price tiers
  * @returns {Array<Object>} 140 deterministic fictional players
  */
-export function generatePlayers(seed = PLAYER_SEED) {
+export function generatePlayers(seed = PLAYER_SEED, season = '2025') {
   let numericSeed = seed;
   if (typeof seed === 'string') {
     numericSeed = 0;
@@ -284,6 +333,7 @@ export function generatePlayers(seed = PLAYER_SEED) {
   }
   if (!Number.isFinite(Number(numericSeed))) numericSeed = PLAYER_SEED;
   const rng = mulberry32(numericSeed >>> 0);
+  const seasonKey = resolveSeason(season);
 
   const nationalities = buildNationalities(rng);
   const usedNames = new Set();
@@ -302,27 +352,40 @@ export function generatePlayers(seed = PLAYER_SEED) {
         : category === 'MARQUEE'
           ? 8 + Math.floor(rng() * 9)
           : 2 + Math.floor(rng() * 14);
+      const age = 19 + Math.floor(rng() * 17);
+      const status = statusFor({
+        rating,
+        age,
+        experience,
+        nationality,
+        rng,
+        forceUncapped: category === 'ACCELERATED',
+      });
 
       players.push({
         id: `P${String(index + 1).padStart(3, '0')}`,
         name,
-        age: 19 + Math.floor(rng() * 17),
+        age,
         nationality,
         country: nationality,
         role,
         subtype,
         rating,
-        basePrice: basePriceFor(rating, category, rng),
+        // BCCI registration tiers: ₹30 lakh to ₹2 crore for every season.
+        basePrice: basePriceForRating(rating),
         battingStyle,
         bowlingStyle,
         stats: statsFor(role, rating, bowlingStyle, rng),
         experience,
         category,
+        season: seasonKey,
+        ...status,
         availability: 'AVAILABLE',
         soldTo: null,
         soldPrice: null,
         soldRound: null,
         existing: false,
+        retentionCandidate: false,
       });
       index += 1;
     }
