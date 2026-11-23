@@ -29,12 +29,19 @@ import {
   matchFeeProjection,
 } from './rules.js';
 import {
+  activeTradeWindow,
   proposeTrade,
   respondTrade,
+  playerConsent,
+  amendTrade,
+  expireTrades,
+  reportTampering,
+  ruleTampering,
   injurePlayer,
   signInjuryReplacement,
   withdrawPlayer,
 } from './season-ops.js';
+import { suggestAiTrades } from './trade-ai.js';
 
 export { getNextBid, validateBid, computeResults };
 export { canFranchiseHoldPlayer } from './validation.js';
@@ -277,14 +284,23 @@ export class AuctionEngine {
 
   dispatch(action) {
     if (!action || typeof action !== 'object') return failure('Invalid action');
+    // Trade deadlines are real-time: lapse them before applying any action so
+    // a stale EOI can never be accepted after its 48 hours are up.
+    const expired = this._expireTrades();
     const result = this._apply(action);
-    if (result.ok) this._commit();
+    if (result.ok || expired) this._commit();
     return result;
   }
 
   async tick() {
     const state = this.state;
-    if (!state.clockRunning || TERMINAL_PHASES.has(state.phase)) return { changed: false };
+    // Trade windows run outside the live auction, so deadlines must lapse even
+    // in terminal phases and while the auction clock is paused.
+    const expired = this._expireTrades();
+    if (!state.clockRunning || TERMINAL_PHASES.has(state.phase)) {
+      if (expired) this._commit();
+      return { changed: expired };
+    }
 
     const pace = paceOf(state);
     state.phaseTicks = (Number(state.phaseTicks) || 0) + 1;
@@ -569,7 +585,11 @@ export class AuctionEngine {
 
       // ------------------------------------------- season operations (BCCI)
       case 'PROPOSE_TRADE': {
-        const outcome = proposeTrade(state, action);
+        const fromId = action.fromFranchiseId || action.franchiseId || state.userFranchiseId;
+        if (fromId !== state.userFranchiseId && action.source !== 'AI') {
+          return failure('You may only file an EOI from your own franchise');
+        }
+        const outcome = proposeTrade(state, { ...action, fromFranchiseId: fromId });
         if (!outcome.ok) return outcome;
         this._pushEvent('TRADE', outcome.message, { tradeId: outcome.trade?.id });
         this._announce(outcome.message, 'TRADE');
@@ -577,10 +597,83 @@ export class AuctionEngine {
       }
 
       case 'RESPOND_TRADE': {
+        const trade = (state.trades || []).find((entry) => entry.id === action.tradeId);
+        if (!trade) return failure('Trade not found');
+        if (trade.toFranchiseId !== state.userFranchiseId && action.source !== 'AI' && !action.auto) {
+          return failure('Only the approached franchise can answer this EOI');
+        }
         const outcome = respondTrade(state, action);
         if (!outcome.ok) return outcome;
         this._pushEvent('TRADE', outcome.message, { tradeId: outcome.trade?.id });
         this._announce(outcome.message, 'TRADE');
+        return outcome;
+      }
+
+      case 'PLAYER_TRADE_CONSENT': {
+        const trade = (state.trades || []).find((entry) => entry.id === action.tradeId);
+        if (!trade) return failure('Trade not found');
+        const ownerId = (trade.givePlayerIds || []).includes(action.playerId)
+          ? trade.fromFranchiseId
+          : trade.toFranchiseId;
+        if (ownerId !== state.userFranchiseId && action.source !== 'AI') {
+          return failure('You can only sign consent for players under your own contract');
+        }
+        const outcome = playerConsent(state, action);
+        if (!outcome.ok) return outcome;
+        this._pushEvent('TRADE', outcome.message, { tradeId: trade.id, playerId: action.playerId });
+        this._announce(outcome.message, 'TRADE');
+        return outcome;
+      }
+
+      case 'AMEND_TRADE': {
+        const trade = (state.trades || []).find((entry) => entry.id === action.tradeId);
+        if (!trade) return failure('Trade not found');
+        const actor = action.franchiseId || state.userFranchiseId;
+        if (actor !== state.userFranchiseId && action.source !== 'AI') {
+          return failure('You may only negotiate terms for your own franchise');
+        }
+        if (trade.fromFranchiseId !== actor && trade.toFranchiseId !== actor) {
+          return failure('Only the two franchises involved can renegotiate the terms');
+        }
+        const outcome = amendTrade(state, action);
+        if (!outcome.ok) return outcome;
+        this._pushEvent('TRADE', outcome.message, { tradeId: trade.id });
+        this._announce(outcome.message, 'TRADE');
+        return outcome;
+      }
+
+      case 'RUN_AI_TRADES': {
+        if (!activeTradeWindow(state)) {
+          return failure('No BCCI trade window is open — rival trade activity resumes outside the live auction');
+        }
+        const limit = Math.min(4, Math.max(1, Number(action.limit) || 2));
+        const outcomes = [];
+        for (const deal of suggestAiTrades(state, limit)) {
+          const outcome = proposeTrade(state, { ...deal, source: 'AI' });
+          if (!outcome.ok) continue; // every window/purse/cap rule still applies
+          outcomes.push(outcome.trade);
+          this._pushEvent('TRADE', outcome.message, { tradeId: outcome.trade.id });
+        }
+        if (!outcomes.length) {
+          return failure('No rival franchise found a budget-valid, need-based deal in this window');
+        }
+        this._announce(`${outcomes.length} rival trade proposal(s) filed with the BCCI.`, 'TRADE');
+        return { ok: true, trades: outcomes, message: `${outcomes.length} rival EOI(s) submitted to the BCCI.` };
+      }
+
+      case 'REPORT_TAMPERING': {
+        const outcome = reportTampering(state, action);
+        if (!outcome.ok) return outcome;
+        this._pushEvent('TAMPERING', outcome.message, { caseId: outcome.case?.id });
+        this._announce(outcome.message, 'TAMPERING');
+        return outcome;
+      }
+
+      case 'RULE_TAMPERING': {
+        const outcome = ruleTampering(state, action);
+        if (!outcome.ok) return outcome;
+        this._pushEvent('TAMPERING', outcome.message, { caseId: outcome.case?.id });
+        this._announce(outcome.message, 'TAMPERING');
         return outcome;
       }
 
@@ -891,6 +984,8 @@ export class AuctionEngine {
     if (!Array.isArray(state.nominations)) state.nominations = [];
     if (!Array.isArray(state.rtmLog)) state.rtmLog = [];
     if (!Array.isArray(state.trades)) state.trades = [];
+    if (!Array.isArray(state.tamperingCases)) state.tamperingCases = [];
+    if (!Number.isFinite(Number(state.bcciTradeRevenue))) state.bcciTradeRevenue = 0;
     if (state.rtm === undefined || state.rtm === null) state.rtm = null;
     if (!Number.isFinite(Number(state.welfareFund))) state.welfareFund = 0;
     if (!Number.isFinite(Number(state.matchFeeProjection))) state.matchFeeProjection = matchFeeProjection(state.season);
@@ -915,6 +1010,17 @@ export class AuctionEngine {
           ? Number(player.soldPrice)
           : Number(player.retentionCost) || Number(player.contractFee) || 0;
       }
+      if (!Array.isArray(player.tradeHistory)) player.tradeHistory = [];
+      if (!Number.isFinite(Number(player.transferFeeEarned))) player.transferFeeEarned = 0;
+    }
+
+    // Trade records must always carry their consent map and audit timeline.
+    for (const trade of state.trades) {
+      if (!trade || typeof trade !== 'object') continue;
+      if (!Array.isArray(trade.givePlayerIds)) trade.givePlayerIds = [];
+      if (!Array.isArray(trade.getPlayerIds)) trade.getPlayerIds = [];
+      if (!Array.isArray(trade.timeline)) trade.timeline = [];
+      if (!trade.consents || typeof trade.consents !== 'object') trade.consents = {};
     }
 
     const maxAdditions = Number.isFinite(Number(state.config.maxAdditions))
@@ -927,6 +1033,10 @@ export class AuctionEngine {
       if (!Array.isArray(franchise.existing)) franchise.existing = [];
       if (!Array.isArray(franchise.previousSquad)) franchise.previousSquad = [];
       if (!Array.isArray(franchise.trades)) franchise.trades = [];
+      if (!Array.isArray(franchise.tradedIn)) franchise.tradedIn = [];
+      if (!Array.isArray(franchise.tradedOut)) franchise.tradedOut = [];
+      if (!Number.isFinite(Number(franchise.tradeCashDelta))) franchise.tradeCashDelta = 0;
+      if (!Number.isFinite(Number(franchise.transferFeeEarned))) franchise.transferFeeEarned = 0;
       if (!Number.isFinite(Number(franchise.retentionSpent))) franchise.retentionSpent = 0;
       if (!Number.isFinite(Number(franchise.rtmCards))) {
         franchise.rtmCards = rulesFor(state.season, state.format).rtmAvailable
@@ -984,6 +1094,15 @@ export class AuctionEngine {
   _pushEvent(type, text, extra = {}) {
     this.state.eventLog.push({ id: uid('evt'), at: nowIso(), type, text, ...extra });
     if (this.state.eventLog.length > EVENT_LIMIT) this.state.eventLog.splice(0, this.state.eventLog.length - EVENT_LIMIT);
+  }
+
+  /** Lapse overdue EOIs/consent windows; returns true when anything expired. */
+  _expireTrades() {
+    const expired = expireTrades(this.state);
+    for (const trade of expired) {
+      this._pushEvent('TRADE_EXPIRED', `Trade ${trade.id} lapsed — the deadline passed without completion.`, { tradeId: trade.id });
+    }
+    return expired.length > 0;
   }
 
   _announce(text, kind) {

@@ -301,6 +301,28 @@ function makeDirectEngine(format, aiClient, config = {}, season = format === 'MI
 
 const stubAi = (rule) => ({ async decide(ctx) { return rule(ctx); } });
 
+/**
+ * Mini retentions keep each player's exact contract fee, so overseas picks must
+ * fit the ₹18 Cr ceiling. Greedy by rating, mirroring the AI retention picker.
+ */
+function miniRetentionPicks(state, franchiseId, count = 10) {
+  const cap = Number(state.config?.overseasSalaryCap) || 0;
+  const owned = state.players
+    .filter((player) => player.previousFranchiseId === franchiseId && player.retentionCandidate)
+    .sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id));
+  const picks = [];
+  let overseasSalary = 0;
+  for (const player of owned) {
+    if (picks.length >= count) break;
+    const overseas = player.nationality && player.nationality !== 'India';
+    const fee = Number(player.contractFee) || 0;
+    if (overseas && cap > 0 && overseasSalary + fee > cap + 0.000001) continue;
+    if (overseas) overseasSalary += fee;
+    picks.push(player);
+  }
+  return picks;
+}
+
 async function scenarioCreateAndIntro() {
   const created = await act({
     action: 'CREATE', format: 'MEGA', difficulty: 'BALANCED', userFranchiseId: 'F1', config: CONFIG,
@@ -562,8 +584,9 @@ async function scenarioRetentions() {
 
   const miniOwned = miniState.players.filter((p) => p.previousFranchiseId === 'F1' && p.retentionCandidate)
     .sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id));
-  const ten = miniOwned.slice(0, 10).map((p) => p.id);
-  const miniCost = Math.round(miniOwned.slice(0, 10).reduce((sum, p) => sum + (Number(p.contractFee) || 0), 0) * 100) / 100;
+  const miniTen = miniRetentionPicks(miniState, 'F1', 10);
+  const ten = miniTen.map((p) => p.id);
+  const miniCost = Math.round(miniTen.reduce((sum, p) => sum + (Number(p.contractFee) || 0), 0) * 100) / 100;
   const miniSet = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: ten });
   assert.equal(miniSet.ok, true, `MINI SET_RETENTIONS failed: ${miniSet.error}`);
   miniState = mini.getState();
@@ -573,9 +596,12 @@ async function scenarioRetentions() {
   assert.ok(miniState.franchises.slice(1).every((f) => f.retentions.length > 0 && f.rtmCards === 0));
   assert.ok(miniState.franchises[0].additionsLimit <= 15, 'ten retentions should reduce additions room');
 
-  const allOwned = miniOwned.map((p) => p.id);
+  const overCap = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: miniOwned.map((p) => p.id) });
+  assert.equal(overCap.ok, false, 'the full previous squad breaches the ₹18 Cr overseas salary ceiling');
+  assert.match(overCap.error || '', /overseas salary cap/i);
+  const allOwned = miniRetentionPicks(miniState, 'F1', miniOwned.length).map((p) => p.id);
   const allSet = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: allOwned });
-  assert.equal(allSet.ok, true, `retaining a full previous squad should be legal: ${allSet.error}`);
+  assert.equal(allSet.ok, true, `retaining a cap-compliant previous squad should be legal: ${allSet.error}`);
   const zeroMini = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: [] });
   assert.equal(zeroMini.ok, true);
   miniState = mini.getState();
@@ -631,9 +657,7 @@ async function scenarioMiniAuction() {
   assert.equal(created.state.config.totalSalaryCap, 151);
   assert.equal(created.state.config.overseasSalaryCap, 18);
   assert.ok(created.state.franchises.every((f) => f.squad.length === 0), 'MINI squads should start empty');
-  const picks = created.state.players
-    .filter((p) => p.previousFranchiseId === 'F1' && p.retentionCandidate)
-    .sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id)).slice(0, 10).map((p) => p.id);
+  const picks = miniRetentionPicks(created.state, 'F1', 10).map((p) => p.id);
   assert.equal(picks.length, 10, 'F1 needs ten previous-season contracts');
   const configured = await act({ action: 'SET_RETENTIONS', playerIds: picks });
   assert.equal(configured.ok, true, `MINI SET_RETENTIONS failed: ${configured.error}`);
@@ -735,6 +759,41 @@ async function scenarioAccelerationAndResults() {
   assert.equal(source.soldCount + source.unsoldCount, called);
   assert.equal(source.unsold.length, source.unsoldCount);
   pass(`final review COMPLETED / results consistent (${source.soldCount} sold, ${source.unsoldCount} unsold)`);
+
+  // A completed auction opens POST_AUCTION; the same BCCI rules apply over HTTP.
+  const scouted = await act({ action: 'RUN_AI_TRADES', limit: 3 });
+  assert.equal(scouted.ok, true, `HTTP RUN_AI_TRADES failed: ${scouted.error}`);
+  const tradedState = scouted.state || await getState();
+  assert.ok(tradedState.trades.length > 0, 'rival scouting should file at least one EOI');
+  assert.ok(tradedState.trades.some((trade) => trade.window === 'POST_AUCTION'));
+  pass(`HTTP: ${tradedState.trades.length} rival EOI(s) filed in the post-auction window`);
+
+  const foreignTrade = tradedState.trades.find((trade) => trade.toFranchiseId !== tradedState.userFranchiseId);
+  if (foreignTrade) {
+    const spoofed = await act({
+      action: 'RESPOND_TRADE', tradeId: foreignTrade.id, accept: true, source: 'AI',
+    });
+    assert.equal(spoofed.ok, false, 'a human client must not answer an EOI addressed to an AI franchise');
+    assert.match(spoofed.error || '', /approached/i);
+    pass('HTTP: source:AI cannot impersonate the approached franchise');
+  }
+  const myEoi = tradedState.trades.find((trade) => trade.status === 'PENDING_48H'
+    && trade.toFranchiseId === tradedState.userFranchiseId);
+  if (myEoi) {
+    const answered = await act({ action: 'RESPOND_TRADE', tradeId: myEoi.id, accept: true });
+    assert.equal(answered.ok, true, `HTTP RESPOND_TRADE failed: ${answered.error}`);
+    pass('HTTP: human answers an EOI addressed to their own franchise');
+  }
+  const reportedCase = await act({
+    action: 'REPORT_TAMPERING', franchiseId: 'F2',
+    playerId: final.franchises.find((f) => f.id === 'F2').squad[0], details: 'HTTP tampering check.',
+  });
+  assert.equal(reportedCase.ok, true, `HTTP REPORT_TAMPERING failed: ${reportedCase.error}`);
+  const caseId = reportedCase.state.tamperingCases.at(-1).id;
+  const ruledCase = await act({ action: 'RULE_TAMPERING', caseId, upheld: false });
+  assert.equal(ruledCase.ok, true, `HTTP RULE_TAMPERING failed: ${ruledCase.error}`);
+  assert.equal(ruledCase.state.tamperingCases.find((record) => record.id === caseId).status, 'DISMISSED');
+  pass('HTTP: tampering report and BCCI ruling round-trip');
 }
 
 async function scenarioPacingAndEarlyBid() {
@@ -919,43 +978,304 @@ async function scenarioSalaryAndSeasonOps() {
   assert.equal(f2.purse, purseBefore - 25, 'full bid debits the purse, not just the capped salary');
   pass('2026 overseas lot: ₹18 Cr salary / ₹7 Cr to welfare / full bid debited');
 
-  const miniTrade = engine.dispatch({
-    type: 'PROPOSE_TRADE', fromFranchiseId: 'F2', toFranchiseId: 'F3', givePlayerIds: [target.id], window: 'POST_AUCTION',
+  // --- windows are derived from the phase, never from a caller-supplied value
+  const money = (value) => Math.round((Number(value) || 0) * 100) / 100;
+  const domesticOf = (st, teamId, count) => st.franchises.find((f) => f.id === teamId).squad
+    .map((id) => st.players.find((player) => player.id === id))
+    .filter((player) => player && player.nationality === 'India')
+    .slice(0, count);
+  const liveTrade = engine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F2', toFranchiseId: 'F3',
+    givePlayerIds: [f2.squad[0]], window: 'POST_AUCTION', source: 'AI', autoRespond: false,
   });
-  assert.equal(miniTrade.ok, false, 'a mini-auction signing cannot be traded post-auction');
-  assert.match(miniTrade.error || '', /mini auction/i);
+  assert.equal(liveTrade.ok, false, 'no EOI is allowed on the live auction floor');
+  assert.match(liveTrade.error || '', /window|live auction/i);
+
+  // A completed auction opens POST_AUCTION; the mini signing stays frozen and
+  // the 18-player minimum blocks undersized squads from dealing.
+  engine.state.phase = 'COMPLETED';
+  const frozen = engine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F2', toFranchiseId: 'F3',
+    givePlayerIds: [target.id], source: 'AI', autoRespond: false,
+  });
+  assert.equal(frozen.ok, false, 'a mini-auction signing cannot be traded post-auction');
+  assert.match(frozen.error || '', /mini auction/i);
 
   const tradeable = f2.squad.find((id) => {
-    const p = state.players.find((candidate) => candidate.id === id);
-    return p && !p.purchasedInMini && !p.consentWithheld && p.availability === 'SOLD';
+    const player = state.players.find((candidate) => candidate.id === id);
+    return player && !player.purchasedInMini && !player.consentWithheld && player.availability === 'SOLD';
   });
   assert.ok(tradeable, 'F2 needs a retained player to trade');
-  const proposed = engine.dispatch({
-    type: 'PROPOSE_TRADE', fromFranchiseId: 'F2', toFranchiseId: 'F3', givePlayerIds: [tradeable],
-    cash: 1, window: 'POST_SEASON', autoRespond: false,
+  const undersized = engine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F2', toFranchiseId: 'F3',
+    givePlayerIds: [tradeable], source: 'AI', autoRespond: false,
   });
-  assert.equal(proposed.ok, true, `EOI failed: ${proposed.error}`);
-  assert.equal(proposed.trade.status, 'PENDING_48H');
-  assert.equal(proposed.trade.approval, 'AWAITING_PLAYER_CONSENT');
-  state = engine.getState();
-  assert.ok(state.franchises.find((f) => f.id === 'F3').squad.indexOf(tradeable) === -1, 'EOI must not move the player');
-  const responded = engine.dispatch({ type: 'RESPOND_TRADE', tradeId: proposed.trade.id, accept: true });
-  assert.equal(responded.ok, true, `RESPOND_TRADE failed: ${responded.error}`);
-  state = engine.getState();
-  assert.equal(state.trades[0].status, 'APPROVED');
-  assert.ok(state.franchises.find((f) => f.id === 'F3').squad.includes(tradeable));
-  assert.ok(!state.franchises.find((f) => f.id === 'F2').squad.includes(tradeable));
-  assert.equal(state.players.find((p) => p.id === tradeable).previousFranchiseId, 'F3');
-  pass('trades: EOI stays 48h pending, RESPOND_TRADE moves player + cash with BCCI approval');
+  assert.equal(undersized.ok, false, 'post-auction trades require the minimum squad');
+  assert.match(undersized.error || '', /minimum squad/i);
+  pass('trades: no live-auction EOI / mini signings frozen / minimum squad enforced');
 
-  const consentSnapshot = clone(state);
-  consentSnapshot.players.find((p) => p.id === tradeable).consentWithheld = true;
-  const consentEngine = new AuctionEngine(consentSnapshot, { persist: () => {} });
-  const consentCheck = consentEngine.dispatch({
-    type: 'PROPOSE_TRADE', fromFranchiseId: 'F3', toFranchiseId: 'F2', givePlayerIds: [tradeable], window: 'POST_SEASON',
+  // --- full four-step protocol in the POST_SEASON window (2026 MINI SETUP)
+  const setup = AuctionEngine.create({ season: '2026', format: 'MINI', config: CONFIG, persist: () => {} });
+  const selection = miniRetentionPicks(setup.getState(), 'F1', 8);
+  const configured = setup.dispatch({ type: 'SET_RETENTIONS', playerIds: selection.map((player) => player.id) });
+  assert.equal(configured.ok, true, `SET_RETENTIONS failed: ${configured.error}`);
+  let ts = setup.getState();
+  const human = ts.franchises.find((f) => f.id === 'F1');
+  const buyer = ts.franchises.find((f) => f.id === 'F2');
+  const domesticMine = human.squad
+    .map((id) => ts.players.find((player) => player.id === id))
+    .filter((player) => player && player.nationality === 'India');
+  assert.ok(domesticMine.length >= 4, 'need four domestic retained players for consent/negotiation scenarios');
+  const star = domesticMine[0];
+  const second = domesticMine[1];
+  const third = domesticMine[2];
+  const fourth = domesticMine[3];
+  const fee = Number(star.salary);
+  assert.ok(fee > 0, 'retained players must carry an exact contract fee');
+  const purseHumanBefore = human.purse;
+  const purseBuyerBefore = buyer.purse;
+
+  const badCash = setup.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F2',
+    givePlayerIds: [star.id], cash: fee + 1, autoRespond: false,
   });
-  assert.equal(consentCheck.ok, false, 'withheld player consent must block a trade');
-  assert.match(consentCheck.error || '', /consent/i);
+  assert.equal(badCash.ok, false, 'the cash adjustment cannot be renegotiated');
+  assert.match(badCash.error || '', /fixed|exact/i);
+
+  const eoi = setup.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F2',
+    givePlayerIds: [star.id], autoRespond: false, transferFee: 2, playerSharePct: 50,
+  });
+  assert.equal(eoi.ok, true, `EOI failed: ${eoi.error}`);
+  assert.equal(eoi.trade.status, 'PENDING_48H');
+  assert.equal(eoi.trade.approval, 'EOI_SUBMITTED');
+  assert.equal(eoi.trade.type, 'ALL_CASH');
+  assert.equal(eoi.trade.cash, fee);
+  assert.equal(eoi.trade.window, 'POST_SEASON');
+  ts = setup.getState();
+  assert.ok(!ts.franchises.find((f) => f.id === 'F2').squad.includes(star.id), 'an EOI must not move the player');
+
+  const wrongResponder = setup.dispatch({ type: 'RESPOND_TRADE', tradeId: eoi.trade.id, accept: true });
+  assert.equal(wrongResponder.ok, false, 'only the approached franchise can answer an EOI');
+  assert.match(wrongResponder.error || '', /approached/i);
+  const accepted = setup.dispatch({ type: 'RESPOND_TRADE', tradeId: eoi.trade.id, accept: true, source: 'AI' });
+  assert.equal(accepted.ok, true, `RESPOND_TRADE failed: ${accepted.error}`);
+  assert.equal(accepted.trade.status, 'AWAITING_CONSENT');
+  assert.equal(accepted.trade.consents[star.id], 'PENDING', 'human-owned player consent is never automated');
+
+  const consented = setup.dispatch({
+    type: 'PLAYER_TRADE_CONSENT', tradeId: eoi.trade.id, playerId: star.id, consent: true,
+  });
+  assert.equal(consented.ok, true, `PLAYER_TRADE_CONSENT failed: ${consented.error}`);
+  assert.equal(consented.trade.status, 'APPROVED');
+  assert.equal(consented.trade.approval, 'BCCI_APPROVED');
+  ts = setup.getState();
+  const f1After = ts.franchises.find((f) => f.id === 'F1');
+  const f2After = ts.franchises.find((f) => f.id === 'F2');
+  assert.ok(f2After.squad.includes(star.id) && !f1After.squad.includes(star.id));
+  assert.equal(f1After.purse, money(purseHumanBefore + fee), 'seller receives the exact league fee');
+  assert.equal(f2After.purse, money(purseBuyerBefore - fee), 'buyer pays the exact league fee');
+  assert.equal(f1After.tradeCashDelta, fee);
+  assert.equal(f2After.tradeCashDelta, -fee);
+  assert.equal(ts.players.find((p) => p.id === star.id).previousFranchiseId, 'F2');
+  // Transfer fee: BCCI 50%, player up to 50% of the remainder, seller the rest.
+  assert.equal(ts.bcciTradeRevenue, 1);
+  assert.equal(f1After.transferFeeEarned, 0.5);
+  assert.equal(ts.players.find((p) => p.id === star.id).transferFeeEarned, 0.5);
+  assert.equal(f1After.purse, money(purseHumanBefore + fee), 'the transfer fee never touches a purse');
+  assert.ok(consented.trade.timeline.length >= 5, 'the approval audit trail must be complete');
+
+  const tradeResults = computeResults(ts);
+  const rowF1 = tradeResults.franchises.find((row) => row.id === 'F1');
+  const rowF2 = tradeResults.franchises.find((row) => row.id === 'F2');
+  assert.equal(rowF2.squad.find((player) => player.id === star.id).source, 'TRADED');
+  assert.equal(rowF2.tradedInCount, 1);
+  assert.equal(rowF1.tradedOutCount, 1);
+  assert.equal(rowF1.purseSpent, money(Number(f1After.retentionSpent) - fee));
+  assert.equal(rowF2.purseSpent, money(Number(f2After.retentionSpent) + fee));
+  assert.equal(tradeResults.bcciTradeRevenue, 1);
+  assert.equal(tradeResults.trades[0].fromName, f1After.name);
+  assert.equal(tradeResults.trades[0].givePlayers[0].fee, fee);
+  pass('trades: EOI → 48h answer → consent → BCCI approval, exact fee and transfer-fee split');
+
+  // A veto voids an otherwise accepted deal without moving any player or cash.
+  const vetoEoi = setup.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F3',
+    givePlayerIds: [second.id], autoRespond: false,
+  });
+  assert.equal(vetoEoi.ok, true, `veto EOI failed: ${vetoEoi.error}`);
+  const vetoAccept = setup.dispatch({
+    type: 'RESPOND_TRADE', tradeId: vetoEoi.trade.id, accept: true, source: 'AI',
+  });
+  assert.equal(vetoAccept.ok, true);
+  const veto = setup.dispatch({
+    type: 'PLAYER_TRADE_CONSENT', tradeId: vetoEoi.trade.id, playerId: second.id, consent: false,
+  });
+  assert.equal(veto.ok, true);
+  assert.equal(veto.trade.status, 'VETOED');
+  assert.equal(veto.trade.approval, 'NOT_APPROVED');
+  ts = setup.getState();
+  assert.ok(ts.franchises.find((f) => f.id === 'F1').squad.includes(second.id));
+  assert.ok(!ts.franchises.find((f) => f.id === 'F3').squad.includes(second.id));
+  pass('trades: player veto voids an accepted EOI');
+
+  // Player-for-player and cash-plus-player deals with controlled fixed fees.
+  const fixtures = clone(setup.getState());
+  const aPlayers = domesticOf(fixtures, 'F3', 3);
+  const bPlayers = domesticOf(fixtures, 'F4', 2);
+  assert.ok(aPlayers.length === 3 && bPlayers.length === 2, 'need domestic players for swap fixtures');
+  const fixturePlayer = (player, salary) => {
+    player.salary = salary;
+    player.soldPrice = salary;
+    player.rating = 99; // deterministic need/consent verdicts for AI-owned players
+    player.role = 'BATTER';
+  };
+  [aPlayers[0], aPlayers[1]].forEach((player) => fixturePlayer(player, 4)); // 4 + 4 = 8
+  fixturePlayer(bPlayers[0], 8);
+  fixturePlayer(aPlayers[2], 5);
+  fixturePlayer(bPlayers[1], 8); // ₹3 difference settled in cash by F3
+  fixtures.franchises.find((f) => f.id === 'F3').targets = ['BATTER'];
+  fixtures.franchises.find((f) => f.id === 'F4').targets = ['BATTER'];
+  const purseF3Before = fixtures.franchises.find((f) => f.id === 'F3').purse;
+  const purseF4Before = fixtures.franchises.find((f) => f.id === 'F4').purse;
+  const fixEngine = new AuctionEngine(fixtures, { persist: () => {} });
+
+  const swapEoi = fixEngine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F3', toFranchiseId: 'F4',
+    givePlayerIds: [aPlayers[0].id, aPlayers[1].id], getPlayerIds: [bPlayers[0].id],
+    source: 'AI', autoRespond: false,
+  });
+  assert.equal(swapEoi.ok, true, `multi-player swap failed: ${swapEoi.error}`);
+  assert.equal(swapEoi.trade.type, 'PLAYER_SWAP');
+  assert.equal(swapEoi.trade.cash, 0);
+  assert.equal(swapEoi.trade.cashAdjustment, 0);
+  const swapAccept = fixEngine.dispatch({
+    type: 'RESPOND_TRADE', tradeId: swapEoi.trade.id, accept: true, source: 'AI',
+  });
+  assert.equal(swapAccept.ok, true);
+  assert.equal(swapAccept.trade.status, 'APPROVED', 'AI consents should complete the swap');
+  let fs = fixEngine.getState();
+  assert.ok(fs.franchises.find((f) => f.id === 'F4').squad.includes(aPlayers[0].id));
+  assert.ok(fs.franchises.find((f) => f.id === 'F3').squad.includes(bPlayers[0].id));
+  assert.equal(fs.franchises.find((f) => f.id === 'F3').purse, purseF3Before, 'equal-salary swap moves no cash');
+  assert.equal(fs.franchises.find((f) => f.id === 'F4').purse, purseF4Before);
+
+  const badDifference = fixEngine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F3', toFranchiseId: 'F4',
+    givePlayerIds: [aPlayers[2].id], getPlayerIds: [bPlayers[1].id],
+    cash: 4, source: 'AI', autoRespond: false,
+  });
+  assert.equal(badDifference.ok, false, 'the salary difference is derived, not negotiable');
+  assert.match(badDifference.error || '', /fixed|exact/i);
+  const cashPlusEoi = fixEngine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F3', toFranchiseId: 'F4',
+    givePlayerIds: [aPlayers[2].id], getPlayerIds: [bPlayers[1].id],
+    cash: 3, source: 'AI', autoRespond: false,
+  });
+  assert.equal(cashPlusEoi.ok, true, `cash-plus-player EOI failed: ${cashPlusEoi.error}`);
+  assert.equal(cashPlusEoi.trade.type, 'CASH_PLUS_PLAYER');
+  assert.equal(cashPlusEoi.trade.cash, 3);
+  assert.equal(cashPlusEoi.trade.cashAdjustment, 3, 'proposer pays the exact salary difference');
+  const cashPlusAccept = fixEngine.dispatch({
+    type: 'RESPOND_TRADE', tradeId: cashPlusEoi.trade.id, accept: true, source: 'AI',
+  });
+  assert.equal(cashPlusAccept.ok, true);
+  assert.equal(cashPlusAccept.trade.status, 'APPROVED');
+  fs = fixEngine.getState();
+  assert.equal(fs.franchises.find((f) => f.id === 'F3').purse, money(purseF3Before - 3));
+  assert.equal(fs.franchises.find((f) => f.id === 'F4').purse, money(purseF4Before + 3));
+  pass('trades: multi-player PLAYER_SWAP / CASH_PLUS_PLAYER settle exact fixed fees');
+
+  // Negotiation can amend the transfer fee while consent is pending; changing
+  // players would re-open consent, and exact cash is always recomputed.
+  const amendEoi = setup.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F4',
+    givePlayerIds: [third.id], autoRespond: false, transferFee: 1, playerSharePct: 50,
+  });
+  assert.equal(amendEoi.ok, true, `negotiation EOI failed: ${amendEoi.error}`);
+  const amendAccept = setup.dispatch({
+    type: 'RESPOND_TRADE', tradeId: amendEoi.trade.id, accept: true, source: 'AI',
+  });
+  assert.equal(amendAccept.trade.status, 'AWAITING_CONSENT');
+  const amended = setup.dispatch({
+    type: 'AMEND_TRADE', tradeId: amendEoi.trade.id, transferFee: 2, playerSharePct: 25,
+  });
+  assert.equal(amended.ok, true, `AMEND_TRADE failed: ${amended.error}`);
+  assert.equal(amended.trade.transferFee.total, 2);
+  assert.equal(amended.trade.transferFee.playerSharePct, 25);
+  assert.equal(amended.trade.cash, Number(third.salary), 'amending a fee cannot renegotiate the exact league fee');
+  assert.equal(amended.trade.consents[third.id], 'PENDING');
+  const amendedConsent = setup.dispatch({
+    type: 'PLAYER_TRADE_CONSENT', tradeId: amendEoi.trade.id, playerId: third.id, consent: true,
+  });
+  assert.equal(amendedConsent.trade.status, 'APPROVED');
+  assert.equal(amendedConsent.trade.transferFee.bcciCut, 1);
+  assert.equal(setup.getState().bcciTradeRevenue, 2, 'amended transfer fee settles through the BCCI ledger');
+  pass('trades: AMEND_TRADE renegotiates the transfer fee, not the fixed league fee');
+
+  // BCCI vetting rejects deals that would breach purse or squad limits.
+  const guardState = clone(setup.getState());
+  const guard = new AuctionEngine(guardState, { persist: () => {} });
+  guard.state.franchises.find((f) => f.id === 'F4').purse = 0;
+  const noPurse = guard.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F4',
+    givePlayerIds: [fourth.id], source: 'AI', autoRespond: false,
+  });
+  assert.equal(noPurse.ok, false, 'a deal the buyer cannot fund must be rejected');
+  assert.match(noPurse.error || '', /fund|purse/i);
+
+  const slotState = clone(setup.getState());
+  const slotGuard = new AuctionEngine(slotState, { persist: () => {} });
+  slotGuard.state.config.maxSquad = slotGuard.getState().franchises.find((f) => f.id === 'F4').squad.length;
+  const noSlot = slotGuard.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F4',
+    givePlayerIds: [fourth.id], source: 'AI', autoRespond: false,
+  });
+  assert.equal(noSlot.ok, false, 'a deal that exceeds the receiving squad limit must be rejected');
+  assert.match(noSlot.error || '', /squad limit/i);
+  pass('trades: BCCI vetting blocks unfunded deals and squad-limit breaches');
+
+  // Anti-tampering: an upheld allegation fines the purse and bans the player.
+  const offender = ts.franchises.find((f) => f.id === 'F6');
+  const victimId = offender.squad[0];
+  const reported = setup.dispatch({
+    type: 'REPORT_TAMPERING', franchiseId: 'F6', playerId: victimId, details: 'Informal contact before an EOI.',
+  });
+  assert.equal(reported.ok, true, `REPORT_TAMPERING failed: ${reported.error}`);
+  const purseOffenderBefore = setup.getState().franchises.find((f) => f.id === 'F6').purse;
+  const ruled = setup.dispatch({
+    type: 'RULE_TAMPERING', caseId: reported.case.id, upheld: true, fine: 1, banSeasons: 1,
+  });
+  assert.equal(ruled.ok, true, `RULE_TAMPERING failed: ${ruled.error}`);
+  ts = setup.getState();
+  assert.equal(ts.franchises.find((f) => f.id === 'F6').purse, money(purseOffenderBefore - 1));
+  const bannedPlayer = ts.players.find((p) => p.id === victimId);
+  assert.equal(bannedPlayer.banUntilSeason, '2027');
+  assert.equal(bannedPlayer.tamperingBan, true);
+  const bannedTrade = setup.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F6', toFranchiseId: 'F2',
+    givePlayerIds: [victimId], source: 'AI', autoRespond: false,
+  });
+  assert.equal(bannedTrade.ok, false, 'a banned player cannot be traded');
+  assert.match(bannedTrade.error || '', /ban/i);
+  pass('anti-tampering: report → purse fine + season ban → player cannot be traded');
+
+  // Rival scouting obeys the same window, purse and cap rules as human EOIs.
+  const aiRun = setup.dispatch({ type: 'RUN_AI_TRADES', limit: 3 });
+  assert.equal(aiRun.ok, true, `RUN_AI_TRADES failed: ${aiRun.error}`);
+  assert.ok(aiRun.trades.length >= 1, 'expected at least one budget-valid rival EOI');
+  for (const rivalTrade of aiRun.trades) assert.equal(rivalTrade.window, 'POST_SEASON');
+  pass(`AI trades: ${aiRun.trades.length} rival EOI(s) filed through the BCCI rules engine`);
+
+  const withheldSnapshot = clone(setup.getState());
+  withheldSnapshot.players.find((p) => p.id === second.id).consentWithheld = true;
+  const withheldEngine = new AuctionEngine(withheldSnapshot, { persist: () => {} });
+  const withheldCheck = withheldEngine.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F3',
+    givePlayerIds: [second.id], source: 'AI',
+  });
+  assert.equal(withheldCheck.ok, false, 'withheld player consent must block a trade');
+  assert.match(withheldCheck.error || '', /consent/i);
 
   const megaSetup = AuctionEngine.create({ season: '2025', format: 'MEGA', config: CONFIG, persist: () => {} });
   const noWindow = megaSetup.dispatch({
@@ -964,6 +1284,34 @@ async function scenarioSalaryAndSeasonOps() {
   assert.equal(noWindow.ok, false, 'no trading is allowed immediately before a Mega Auction');
   assert.match(noWindow.error || '', /Mega/i);
   pass('trades: withheld consent blocked / no trade before a Mega Auction');
+
+  // Deadlines are real time: they lapse on dispatch and on tick, even SETUP.
+  const expiryEoi = setup.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F4',
+    givePlayerIds: [second.id], autoRespond: false,
+  });
+  assert.equal(expiryEoi.ok, true);
+  setup.state.trades.find((trade) => trade.id === expiryEoi.trade.id).respondBy =
+    new Date(Date.now() - 1000).toISOString();
+  setup.dispatch({ type: 'MEETING' });
+  ts = setup.getState();
+  assert.equal(ts.trades.find((trade) => trade.id === expiryEoi.trade.id).status, 'EXPIRED');
+
+  const consentExpiryEoi = setup.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F5',
+    givePlayerIds: [second.id], autoRespond: false,
+  });
+  assert.equal(consentExpiryEoi.ok, true);
+  const consentExpiryAccept = setup.dispatch({
+    type: 'RESPOND_TRADE', tradeId: consentExpiryEoi.trade.id, accept: true, source: 'AI',
+  });
+  assert.equal(consentExpiryAccept.trade.status, 'AWAITING_CONSENT');
+  setup.state.trades.find((trade) => trade.id === consentExpiryEoi.trade.id).consentBy =
+    new Date(Date.now() - 1000).toISOString();
+  const ticked = await setup.tick();
+  assert.equal(ticked.changed, true, 'tick must report lapsed trade deadlines');
+  assert.equal(setup.getState().trades.find((trade) => trade.id === consentExpiryEoi.trade.id).status, 'EXPIRED');
+  pass('trades: 48-hour response and 72-hour consent deadlines lapse automatically');
 
   const injured = engine.dispatch({ type: 'INJURE_PLAYER', playerId: target.id });
   assert.equal(injured.ok, true, `INJURE_PLAYER failed: ${injured.error}`);
@@ -1002,9 +1350,8 @@ async function scenarioSalaryAndSeasonOps() {
   assert.ok(results.injuries.some((entry) => entry.playerId === target.id && entry.status === 'INJURED'));
   assert.ok(results.injuries.some((entry) => entry.playerId === tradeable && entry.status === 'WITHDRAWN'
     && entry.banUntilSeason === '2028'));
-  assert.ok(results.trades.length >= 1);
   assert.equal(results.tradeWindows.length, 2);
-  pass('results: season rules, welfare, trades and injury/withdrawal reporting');
+  pass('results: season rules, welfare and injury/withdrawal reporting');
 }
 
 async function main() {

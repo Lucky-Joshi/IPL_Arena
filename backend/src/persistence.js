@@ -9,7 +9,7 @@ const PHASES = new Set([
 ]);
 const REQUIRED_ARRAYS = [
   'players', 'franchises', 'proceedings', 'eventLog', 'conversations',
-  'bidHistory', 'nominations',
+  'bidHistory', 'nominations', 'trades',
 ];
 const CONFIG_NUMBERS = [
   'startingPurse', 'minSquad', 'maxSquad', 'maxOverseas', 'maxAdditions',
@@ -20,7 +20,7 @@ const OPTIONAL_CONFIG_NUMBERS = [
   'maxRetentions', 'maxCappedRetentions', 'maxUncappedRetentions',
   'totalSalaryCap', 'overseasSalaryCap', 'matchFee',
 ];
-const OPTIONAL_STATE_NUMBERS = ['welfareFund', 'matchFeeProjection'];
+const OPTIONAL_STATE_NUMBERS = ['welfareFund', 'matchFeeProjection', 'bcciTradeRevenue'];
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -55,6 +55,24 @@ export function validateState(state) {
   }
   if (state.franchises.length !== 10) throw new Error(`expected 10 franchises, found ${state.franchises.length}`);
   if (!PHASES.has(state.phase)) throw new Error(`unknown phase: ${String(state.phase)}`);
+
+  // Trade ledger: every EOI needs an id, a status and both franchise references.
+  const tradeIds = new Set();
+  for (const trade of state.trades) {
+    if (!trade || typeof trade.id !== 'string' || !trade.id) throw new Error('trade missing id');
+    if (tradeIds.has(trade.id)) throw new Error(`duplicate trade id: ${trade.id}`);
+    tradeIds.add(trade.id);
+    if (typeof trade.status !== 'string' || !trade.status) throw new Error(`trade ${trade.id} missing status`);
+    if (typeof trade.fromFranchiseId !== 'string' || typeof trade.toFranchiseId !== 'string') {
+      throw new Error(`trade ${trade.id} missing franchise references`);
+    }
+    if (!Array.isArray(trade.givePlayerIds) || !Array.isArray(trade.getPlayerIds)) {
+      throw new Error(`trade ${trade.id} player lists must be arrays`);
+    }
+  }
+  if (state.tamperingCases !== undefined && !Array.isArray(state.tamperingCases)) {
+    throw new Error('tamperingCases is not an array');
+  }
 
   const franchiseIds = new Set();
   for (const franchise of state.franchises) {

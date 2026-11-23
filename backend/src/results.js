@@ -46,14 +46,19 @@ function enrichedSquad(state, franchise) {
   const existing = new Set(franchise.existing || []);
   const prices = new Map((franchise.purchases || []).map((purchase) => [purchase.playerId, Number(purchase.price) || 0]));
   const retentionByPlayer = new Map((franchise.retentions || []).map((entry) => [entry.playerId, Number(entry.cost) || 0]));
+  const tradedIn = new Map((franchise.tradedIn || []).map((entry) => [entry.playerId, Number(entry.fee) || 0]));
   return (franchise.squad || [])
     .map((id) => {
       const player = playerById.get(id);
       if (!player) return null;
-      const source = existing.has(id) ? 'EXISTING' : 'PURCHASED';
-      const price = source === 'EXISTING'
-        ? (retentionByPlayer.get(id) ?? (Number(player.retentionCost) || 0))
-        : (prices.get(id) || 0);
+      // A traded-in player keeps their fixed league fee; the trade ledger,
+      // not the auction ledger, is the source of truth for their price.
+      const source = tradedIn.has(id) ? 'TRADED' : existing.has(id) ? 'EXISTING' : 'PURCHASED';
+      const price = source === 'TRADED'
+        ? tradedIn.get(id)
+        : source === 'EXISTING'
+          ? (retentionByPlayer.get(id) ?? (Number(player.retentionCost) || 0))
+          : (prices.get(id) || 0);
       return { ...player, stats: { ...player.stats }, source, price };
     })
     .filter(Boolean);
@@ -69,6 +74,8 @@ export function computeResults(state) {
   const maxOverseas = Number.isFinite(Number(config.maxOverseas)) ? Number(config.maxOverseas) : 8;
   const franchises = state?.franchises || [];
   const players = state?.players || [];
+  const playerById = new Map(players.map((player) => [player.id, player]));
+  const franchiseById = new Map(franchises.map((franchise) => [franchise.id, franchise]));
   const purchases = purchaseRows(state);
 
   // Retained players are resolved at a retention cost rather than an auction
@@ -86,7 +93,13 @@ export function computeResults(state) {
     const purchased = franchise.purchases || [];
     const retentionSpent = Number(franchise.retentionSpent) || 0;
     const auctionSpent = purchased.reduce((total, purchase) => total + (Number(purchase.price) || 0), 0);
-    const purseSpent = money(retentionSpent + auctionSpent);
+    // Trade cash received back reduces net spend; cash paid out increases it.
+    // The auction/retention ledgers stay intact so provenance is auditable.
+    const tradeCashDelta = Number(franchise.tradeCashDelta) || 0;
+    const purseSpent = money(retentionSpent + auctionSpent - tradeCashDelta);
+    const purchasedCount = squad.filter((player) => player.source === 'PURCHASED').length;
+    const existingCount = squad.filter((player) => player.source === 'EXISTING').length;
+    const tradedInCount = squad.filter((player) => player.source === 'TRADED').length;
     const salaryCap = Number(config.totalSalaryCap) || 0;
     const overseasSalaryCap = Number(config.overseasSalaryCap) || 0;
     const overseasSalarySpend = money(franchise.overseasSalarySpend || 0);
@@ -106,13 +119,14 @@ export function computeResults(state) {
     const shortSquadPenalty = Math.max(0, minSquad - squad.length) * 2;
     const balanceScore = round1(clamp(roleScore * 0.72 + qualityScore * 0.28 - overseasPenalty - shortSquadPenalty, 0, 100));
 
-    const teamScore = balanceScore * 0.55 + avgRating * 0.35 + Math.min(8, purchased.length * 0.8) + (squad.length >= minSquad ? 4 : 0);
+    const teamScore = balanceScore * 0.55 + avgRating * 0.35 + Math.min(8, purchasedCount * 0.8) + (squad.length >= minSquad ? 4 : 0);
     const strongestRole = ROLES.slice().sort((a, b) => roleCounts[b] - roleCounts[a] || ROLES.indexOf(a) - ROLES.indexOf(b))[0];
     const thinnestRole = ROLES.slice().sort((a, b) => roleCounts[a] - roleCounts[b] || ROLES.indexOf(a) - ROLES.indexOf(b))[0];
     let rankReason = `Balance ${balanceScore}, average rating ${round1(avgRating)}; strongest at ${strongestRole.toLowerCase()}, thinnest at ${thinnestRole.toLowerCase()}.`;
-    rankReason += purchased.length
-      ? ` ${purchased.length} addition(s) for ₹${money(auctionSpent)} Cr.`
+    rankReason += purchasedCount
+      ? ` ${purchasedCount} addition(s) for ₹${money(auctionSpent)} Cr.`
       : ' No auction purchases.';
+    if (tradedInCount) rankReason += ` ${tradedInCount} player(s) acquired via BCCI-approved trades.`;
     if (retentionSpent > 0) rankReason += ` ₹${money(retentionSpent)} Cr committed to retentions.`;
 
     return {
@@ -124,8 +138,12 @@ export function computeResults(state) {
       purseSpent,
       purseRemaining: money(franchise.purse),
       playerCount: squad.length,
-      existingCount: (franchise.existing || []).length,
-      purchasedCount: purchased.length,
+      existingCount,
+      purchasedCount,
+      tradedInCount,
+      tradedOutCount: (franchise.tradedOut || []).length,
+      tradeCashDelta: money(tradeCashDelta),
+      transferFeeEarned: money(franchise.transferFeeEarned || 0),
       retentionCount: (franchise.retentions || []).length,
       retentionSpent: money(retentionSpent),
       retentionCappedCount,
@@ -171,7 +189,21 @@ export function computeResults(state) {
   const cappedRetentions = rows.reduce((total, row) => total + row.retentionCappedCount, 0);
   const uncappedRetentions = rows.reduce((total, row) => total + row.retentionUncappedCount, 0);
   const rtmUsed = rows.reduce((total, row) => total + row.rtmUsed, 0);
-  const trades = Array.isArray(state?.trades) ? state.trades : [];
+  const trades = (Array.isArray(state?.trades) ? state.trades : []).map((trade) => {
+    const nameOf = (id) => playerById.get(id)?.name || id;
+    const feeOf = (id) => {
+      const player = playerById.get(id);
+      if (!player) return 0;
+      return money(Number(player.salary) > 0 ? Number(player.salary) : Number(player.soldPrice) || Number(player.contractFee) || 0);
+    };
+    return {
+      ...trade,
+      fromName: franchiseById.get(trade.fromFranchiseId)?.name || trade.fromFranchiseId,
+      toName: franchiseById.get(trade.toFranchiseId)?.name || trade.toFranchiseId,
+      givePlayers: (trade.givePlayerIds || []).map((id) => ({ playerId: id, name: nameOf(id), fee: feeOf(id) })),
+      getPlayers: (trade.getPlayerIds || []).map((id) => ({ playerId: id, name: nameOf(id), fee: feeOf(id) })),
+    };
+  });
   const injuries = players.filter((player) => player.injured || player.withdrawn)
     .map((player) => ({
       playerId: player.id,
@@ -196,6 +228,8 @@ export function computeResults(state) {
     rtmUsed,
     trades,
     tradeWindows: tradeWindows(),
+    bcciTradeRevenue: money(state?.bcciTradeRevenue || 0),
+    tamperingCases: Array.isArray(state?.tamperingCases) ? state.tamperingCases : [],
     injuries,
     soldCount: sold.length,
     unsoldCount: unsold.length,

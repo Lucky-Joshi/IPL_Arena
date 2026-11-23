@@ -6,6 +6,7 @@ import { getState, postAction } from '../../lib/api';
 import AuctionRoom from '../../components/AuctionRoom';
 import ManagementRoom from '../../components/ManagementRoom';
 import SquadManager from '../../components/SquadManager';
+import TradeDesk from '../../components/TradeDesk';
 import ProceedingsPanel from '../../components/ProceedingsPanel';
 import BreakOverlay from '../../components/BreakOverlay';
 import { BID_PHASES, cr, phaseLabel } from '../../lib/format';
@@ -16,6 +17,7 @@ const TABS = [
   { id: 'room', label: 'Auction Hall' },
   { id: 'war', label: 'My War Room' },
   { id: 'squads', label: 'Squads' },
+  { id: 'trades', label: 'Trade Desk' },
   { id: 'proceedings', label: 'Proceedings' },
 ];
 
@@ -195,6 +197,7 @@ export default function AuctionPage() {
           <ManagementRoom state={state} onAction={runAction} busy={busy} />
         )}
         {tab === 'squads' && <SquadManager state={state} />}
+        {tab === 'trades' && <TradeDesk state={state} onAction={runAction} busy={busy} />}
         {tab === 'proceedings' && <ProceedingsPanel state={state} />}
       </div>
 

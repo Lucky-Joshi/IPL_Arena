@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { postAction } from '../lib/api';
-import { cappedLabel, cr, formatDateTime, isOverseas, roleColour, roleLabel, ROLES, seasonLabel } from '../lib/format';
+import { cappedLabel, cr, formatDateTime, isOverseas, roleColour, roleLabel, ROLES, seasonLabel, tradeStatusLabel, tradeTypeLabel } from '../lib/format';
 
 function SummaryCard({ label, value, detail }) {
   return (
@@ -179,7 +179,7 @@ export default function ResultsView({ results }) {
                               {player.source || 'EXISTING'}
                             </span>
                           </td>
-                          <td>{player.source === 'PURCHASED' ? cr(player.price) : '—'}</td>
+                          <td>{player.source === 'PURCHASED' || player.source === 'TRADED' ? cr(player.price) : '—'}</td>
                           <td>{cr(player.salary ?? player.price ?? 0)}{Number(player.welfareContribution) > 0 && <small> + {cr(player.welfareContribution)} welfare</small>}</td>
                         </tr>
                       ))}
@@ -226,14 +226,37 @@ export default function ResultsView({ results }) {
             {(results.trades || []).map((trade) => (
               <li key={trade.id}>
                 <span className="report-list-main">
-                  <strong>{trade.status || 'PROPOSED'}</strong>
-                  <small>{trade.fromFranchiseId} → {trade.toFranchiseId} · {trade.window || 'POST_SEASON'}</small>
+                  <strong>{trade.fromName || trade.fromFranchiseId} ⇄ {trade.toName || trade.toFranchiseId}</strong>
+                  <small>
+                    {tradeTypeLabel(trade.type)} · {trade.window || '—'}
+                    {trade.givePlayers?.length ? ` · ${trade.fromName || trade.fromFranchiseId} sends ${trade.givePlayers.map((p) => p.name).join(', ')}` : ''}
+                    {trade.getPlayers?.length ? ` · ${trade.toName || trade.toFranchiseId} sends ${trade.getPlayers.map((p) => p.name).join(', ')}` : ''}
+                    {Number(trade.cash) > 0 ? ` · ${cr(trade.cash)} cash` : ''}
+                    {trade.transferFee?.total > 0 ? ` · transfer fee ${cr(trade.transferFee.total)}` : ''}
+                  </small>
                 </span>
-                <span className="source-badge">{trade.accepted ? 'ACCEPTED' : 'PENDING'}</span>
+                <span className={`trade-status trade-status-${trade.status === 'APPROVED' ? 'ok' : ['REJECTED', 'VETOED', 'EXPIRED'].includes(trade.status) ? 'bad' : 'pending'}`}>
+                  {tradeStatusLabel(trade.status)}
+                </span>
               </li>
             ))}
             {!results.trades?.length && <li className="report-empty">No trades were registered.</li>}
           </ul>
+          {Number(results.bcciTradeRevenue) > 0 && (
+            <p className="balance-note">BCCI transfer-fee revenue: <strong>{cr(results.bcciTradeRevenue)}</strong></p>
+          )}
+          {(results.tamperingCases || []).length > 0 && (
+            <ul className="report-list">
+              {results.tamperingCases.map((record) => (
+                <li key={record.id}>
+                  <span className="report-list-main">
+                    <strong>Tampering · {record.franchiseId}</strong>
+                    <small>{record.playerId} · {record.status}{record.ruling?.upheld ? ` · fine ${cr(record.ruling.fine || 0)}` : ''}</small>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <section className="panel">

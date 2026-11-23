@@ -5,9 +5,9 @@ valuation/decision engine. The Next.js frontend is a read-and-command client.
 
 | Service | Dir | Port | Stack | Responsibility |
 |---|---|---|---|---|
-| Frontend | `frontend/` | 3000 | Next.js (JS/JSX) | Setup, auction hall, war room, squads, results, voice narration |
-| Backend | `backend/` | 4000 | Node 24, built-in `http` (zero deps) | Authoritative engine, validation, persistence, proceedings, season rules |
-| AI | `ai/` | 5000 | Python 3 stdlib `http.server` (zero deps) | Private valuations, per-franchise bid decisions, public commentary |
+| Frontend | `frontend/` | 3000 | Next.js (JS/JSX) | Setup, auction hall, war room, Trade Desk, squads, results, voice narration |
+| Backend | `backend/` | 4000 | Node 24, built-in `http` (zero deps) | Authoritative engine, validation, persistence, proceedings, season rules, BCCI trading and integrity |
+| AI | `ai/` | 5000 | Python 3 stdlib `http.server` (zero deps) | Private valuations, live-lot bid decisions, public commentary (no off-auction trade decisions) |
 
 Runner scripts live at the root (`run-all.cmd`, `verify.cmd`). `npm test` in `backend/` starts isolated
 backend and AI processes and runs the smoke suite.
@@ -27,6 +27,12 @@ PHASE = 'SETUP' | 'OPENING' | 'PLAYER_INTRODUCTION' | 'BIDDING' | 'GOING_ONCE'
       | 'SOLD' | 'UNSOLD' | 'SET_BREAK' | 'STRATEGY_BREAK'
       | 'ACCELERATED_AUCTION' | 'FINAL_REVIEW' | 'COMPLETED'
 STAGE_KIND = 'ANNOUNCEMENT' | 'SET' | 'BREAK' | 'ACCELERATED' | 'REVIEW'
+DEAL_TYPE = 'ALL_CASH' | 'PLAYER_SWAP' | 'CASH_PLUS_PLAYER'
+TRADE_STATUS = 'PENDING_48H' | 'AWAITING_CONSENT' | 'BCCI_REVIEW' | 'APPROVED'
+            | 'REJECTED' | 'EXPIRED' | 'VETOED'
+TRADE_APPROVAL = 'EOI_SUBMITTED' | 'AWAITING_PLAYER_CONSENT' | 'BCCI_REVIEW'
+              | 'BCCI_APPROVED' | 'BCCI_REJECTED' | 'NOT_APPROVED'
+CONSENT = 'PENDING' | 'GRANTED' | 'DENIED'
 ```
 
 Money is always a number in **crore INR** (e.g. `12.5` = ₹12.5 Cr). Display formatting is the frontend's job.
@@ -77,7 +83,9 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
   bidsThisLot: 0,
   rtm: null,                       // live Right to Match offer, see below
   rtmLog: [ { playerId, step, franchiseId, price } ],
-  trades: [ Trade ],
+  trades: [ Trade ],                 // authoritative BCCI EOI ledger
+  tamperingCases: [ TamperingCase ],  // integrity allegations + rulings
+  bcciTradeRevenue: 0,                // cumulative off-purse transfer-fee share
   welfareFund: 0,
   matchFeeProjection: 12.6,
   phaseTicks: 0, stageTicks: 0, aiWaitTicks: 0, goingStage: 0, resultTicks: 0,
@@ -92,6 +100,38 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
 }
 ```
 
+`Trade` (append-only EOI record; `status` is the protocol stage, `approval` is the BCCI decision label):
+```js
+{
+  id: 'trade_001',
+  type: 'ALL_CASH' | 'PLAYER_SWAP' | 'CASH_PLUS_PLAYER',
+  fromFranchiseId, toFranchiseId,
+  givePlayerIds: [playerId], getPlayerIds: [playerId],
+  valueGiven, valueGot,             // exact fixed-fee sums
+  cash,                             // magnitude of the settlement
+  cashAdjustment,                   // signed from the proposer's view: + = proposer pays
+  transferFee: null | {
+    total, playerSharePct, bcciCut, playerAmount, sellerAmount,
+    payerId, sellerId, players: [{ playerId, amount }]
+  },
+  window: 'POST_SEASON' | 'POST_AUCTION',
+  status, approval,
+  createdAt, respondBy, consentBy, executedAt,
+  consents: { [playerId]: CONSENT },
+  timeline: [{ at, status, note }],
+  rejectionReason?: string
+}
+```
+
+`TamperingCase`:
+```js
+{
+  id: 'tamper_001', franchiseId, playerId, details,
+  status: 'REPORTED' | 'UPHELD' | 'DISMISSED', at,
+  ruling?: { upheld, fine, banSeasons, at }
+}
+```
+
 `Player`:
 ```js
 {
@@ -103,7 +143,11 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
   auctionRoundBought: 'MEGA'|'MINI'|null, purchasedInMini: boolean,
   retained: boolean, retentionCost: number, retentionCandidate: boolean,
   injured: boolean, withdrawn: boolean, banUntilSeason: string|null,
-  replacedBy: string|null, isRappReplacement: boolean
+  replacedBy: string|null, isRappReplacement: boolean,
+  consentWithheld: boolean, tamperingBan: boolean,
+  traded: boolean,
+  tradeHistory: [{ tradeId, from, to, at, fee }],
+  transferFeeEarned: number
 }
 ```
 
@@ -118,7 +162,12 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
   retentionSpent, additionsLimit, rtmCards, rtmUsed,
   overseasSalarySpend, welfareContribution,
   purchases: [{ playerId, price, salary, welfare, round, source }],
-  rejected: [playerId], trades: [tradeId],
+  rejected: [playerId],
+  trades: [{ playerId, direction: 'IN'|'OUT', with: franchiseId, tradeId }],
+  tradedIn: [{ playerId, fee, tradeId }],
+  tradedOut: [{ playerId, fee, tradeId }],
+  tradeCashDelta: number,          // cash received is positive; paid is negative
+  transferFeeEarned: number,
   targets, discussions, biddingStatus
 }
 ```
@@ -144,7 +193,9 @@ correct. `START` confirms an empty selection if the user has not picked one.
 - **MEGA (2025):** at most 6 direct retentions, at most 5 capped and at most 2 uncapped. Capped picks cost
   ₹18 / ₹14 / ₹11 / ₹18 / ₹14 Cr in selection order; uncapped picks cost ₹4 Cr. `rtmCards = 6 − retentions`.
 - **MINI (2026/2027):** no RTM and no fixed retention count; each retained player keeps `contractFee`.
-  `additionsLimit` adapts to the retained squad size; `validateBid` enforces the per-franchise cap.
+  Overseas picks must also fit the ₹18 Cr overseas salary ceiling — `buildRetentionPlan` rejects an
+  over-cap selection and the AI picker filters such players. `additionsLimit` adapts to the retained squad
+  size; `validateBid` enforces the per-franchise cap.
 - Re-selection in `SETUP` restores all players and purses before applying the new picks.
 - Retention spend is debited at confirmation and included in results; `purseSpent + purseRemaining =
   config.startingPurse` holds.
@@ -164,12 +215,47 @@ price, log, ticks }`.
 `USE_RTM` decrements `rtmCards` and increments `rtmUsed` exactly once; passing or matching does not.
 `rtmLog` records each step, and the final sale goes through the ordinary salary split and purse debit.
 
-### Trades, injuries and withdrawals (`backend/src/season-ops.js`)
+### BCCI trading (`backend/src/season-ops.js`, `backend/src/trade-ai.js`)
 
-- `PROPOSE_TRADE` creates an EOI with `status: 'PENDING_48H'` and `approval: 'AWAITING_PLAYER_CONSENT'`.
-  It never moves a player. `RESPOND_TRADE` approves and executes player swaps / cash adjustments.
-- Post-season window closes one week before the auction; no trades immediately before a Mega. Post-auction
-  window opens the day after the auction; `purchasedInMini === true` players cannot be traded there.
+`activeTradeWindow(state)` is the only source of truth for the open window; a `window` value in an action
+body is ignored. `SETUP` is `POST_SEASON` for Mini seasons only (never before a Mega); `FINAL_REVIEW` and
+`COMPLETED` are `POST_AUCTION`. There is no window on the live auction floor. `canTradePlayer` rejects
+players who are not contracted (`availability !== 'SOLD'`), have withheld consent, are serving a ban, or
+were bought at the mini auction during `POST_AUCTION`.
+
+The four-step approval protocol:
+
+| Step | Dispatch action | State transition |
+|---:|---|---|
+| 1 | `PROPOSE_TRADE` | append `Trade` with `PENDING_48H` / `EOI_SUBMITTED`, `respondBy = now + 48h`; no player or purse changes |
+| 2 | `RESPOND_TRADE` | reject → `REJECTED` / `NOT_APPROVED`; accept → `AWAITING_CONSENT` / `AWAITING_PLAYER_CONSENT`, `consentBy = now + 72h` |
+| 3 | `AMEND_TRADE`, `PLAYER_TRADE_CONSENT` | renegotiate transfer fee/player lists; each player grants or vetoes. Any `DENIED` → `VETOED` / `NOT_APPROVED` |
+| 4 | internal `vetAndExecute` | `BCCI_REVIEW` → `APPROVED` / `BCCI_APPROVED`, or `REJECTED` / `BCCI_REJECTED` with a reason |
+
+`computeDeal` classifies `ALL_CASH`, `PLAYER_SWAP` (equal fees) or `CASH_PLUS_PLAYER`, and derives
+`cashAdjustment` from the exact fixed salaries. A submitted `cash` must equal its magnitude or the EOI is
+rejected. `validateTradeSquads` checks both post-trade squads for maximum/minimum size, overseas slots,
+total salary cap, Mini overseas salary cap and purse funding. `movePlayer` preserves the fee and contract
+provenance, shifts overseas salary spend to the buyer, appends `tradeHistory` and `tradedIn`/`tradedOut`,
+and records `tradeCashDelta` so `purseSpent = retentionSpent + auctionSpent − tradeCashDelta`.
+
+An off-purse `transferFee` is legal only for `ALL_CASH`: 50% to `state.bcciTradeRevenue`, up to 50% of the
+remainder to the moved player(s), and the balance to `seller.transferFeeEarned`. No purse is debited for it.
+`expireTrades` runs inside every `tick()` before the terminal-phase gate and at the start of `dispatch()`;
+lapsed EOIs/consents become `EXPIRED` / `NOT_APPROVED` with a timeline entry.
+
+`evaluateEoi`, `autoConsent` and `suggestAiTrades` in `trade-ai.js` give the nine rivals deterministic,
+role-gap-aware, budget-checked trading behaviour. The Python service never sees an off-auction trade.
+`RUN_AI_TRADES` generates 1–4 candidate deals that are fed back through `proposeTrade`, so AI proposals
+obey the same window, purse, cap and consent rules. It is human-triggered only; no phase transition files
+a rival EOI automatically.
+
+Anti-tampering: `REPORT_TAMPERING` records an allegation; `RULE_TAMPERING` either dismisses it or records an
+upheld ruling with an optional purse fine and a ban of up to one season (`banUntilSeason`, `tamperingBan`).
+Banned players cannot be traded.
+
+### Injuries and withdrawals (`backend/src/season-ops.js`)
+
 - `INJURE_PLAYER` marks a player `INJURED`. `SIGN_INJURY_REPLACEMENT` signs a RAPP player within the injured
   player's salary and does not debit the purse.
 - `PLAYER_WITHDRAW` with `certifiedInjury: false` marks the player `WITHDRAWN`, removes them from the squad
@@ -204,15 +290,29 @@ Actions:
 `CREATE` (`season, format, difficulty, userFranchiseId, config?`), `SET_RETENTIONS` (`playerIds`; `SETUP`
 only; human franchise only), `START`, `CONTINUE`, `OPEN_BIDDING`, `BID` (`franchiseId`, `amount`),
 `WITHDRAW` (`franchiseId`), `USE_RTM`, `PASS_RTM`, `RTM_RAISE`, `RTM_DECLINE`, `MATCH_RTM`
-(`franchiseId`), `PROPOSE_TRADE` (`fromFranchiseId, toFranchiseId, givePlayerIds, cash?, window?,
-autoRespond?`), `RESPOND_TRADE` (`tradeId, accept`), `INJURE_PLAYER` (`playerId`),
+(`franchiseId`).
+
+BCCI season operations:
+`PROPOSE_TRADE` (`toFranchiseId, givePlayerIds, getPlayerIds?, cash?, transferFee?, playerSharePct?,
+autoRespond?` — `fromFranchiseId` is forced to `state.userFranchiseId`; `window` is ignored),
+`RESPOND_TRADE` (`tradeId, accept, reason?`), `PLAYER_TRADE_CONSENT` (`tradeId, playerId, consent`),
+`AMEND_TRADE` (`tradeId, givePlayerIds?, getPlayerIds?, transferFee?, playerSharePct?`),
+`RUN_AI_TRADES` (`limit` clamped to 1–4), `REPORT_TAMPERING` (`franchiseId, playerId, details?`),
+`RULE_TAMPERING` (`caseId, upheld, fine?, banSeasons?`), `INJURE_PLAYER` (`playerId`),
 `SIGN_INJURY_REPLACEMENT` (`injuredPlayerId, replacementPlayerId, fee`), `PLAYER_WITHDRAW` (`playerId,
-certifiedInjury`), `CALL_BREAK`, `RESUME_BREAK`, `NEXT`, `PAUSE`, `UNPAUSE`, `NOMINATE` (`playerId,
+certifiedInjury`).
+
+Room control: `CALL_BREAK`, `RESUME_BREAK`, `NEXT`, `PAUSE`, `UNPAUSE`, `NOMINATE` (`playerId,
 selected`), `MEETING`, `RESET`.
 
-A `BID` is accepted as soon as a player is on the block; a bid in `PLAYER_INTRODUCTION` or
-`ACCELERATED_AUCTION` opens the floor first, then uses the same `validateBid` check as AI bids. Human RTM
-decisions must name `state.userFranchiseId`; AI RTM decisions are resolved on `tick()`.
+Human-controlled actions are gated by `state.userFranchiseId`. The HTTP layer deletes `source` and `auto`
+from those bodies and forces `fromFranchiseId` for `PROPOSE_TRADE`, so a browser client cannot impersonate
+the internal AI orchestration path. `REPORT_TAMPERING` and `RULE_TAMPERING` are BCCI integrity operations
+and carry no franchise gate. A `BID` is accepted as soon as a player is on the block; a bid in
+`PLAYER_INTRODUCTION` or `ACCELERATED_AUCTION` opens the floor first, then uses the same `validateBid`
+check as AI bids. Human RTM decisions must name `state.userFranchiseId`; AI RTM decisions are resolved on
+`tick()`. Trade deadlines are checked by the clock without a `clockRunning` guard, so a paused auction
+cannot stall a 48h/72h window.
 
 ### Auction pace
 
@@ -233,32 +333,41 @@ authoritative for phase transitions.
 {
   generatedAt, season, seasonLabel, format, rules: {...}, matchFeeProjection, welfareFund,
   totalAuctionSpending, totalRetentionSpending, cappedRetentions, uncappedRetentions,
-  rtmUsed, trades, tradeWindows, injuries, soldCount, unsoldCount,
-  biggestPurchases, bestValue, unsold,
+  rtmUsed, trades, tradeWindows, bcciTradeRevenue, tamperingCases,
+  injuries, soldCount, unsoldCount, biggestPurchases, bestValue, unsold,
   franchises: [{
     id, name, short, primary, owner, rank,
     purseSpent, purseRemaining, salaryCap, salaryHeadroom,
     overseasSalaryCap, overseasSalarySpend, overseasSalaryHeadroom,
     retentionCount, retentionSpent, retentionCappedCount, retentionUncappedCount,
-    playerCount, existingCount, purchasedCount, overseasCount,
-    rtmCards, rtmUsed, tradeCount, welfareContribution,
-    roleCounts, squad: [{...player, source:'EXISTING'|'PURCHASED', price}],
+    playerCount, existingCount, purchasedCount, tradedInCount, tradedOutCount, overseasCount,
+    rtmCards, rtmUsed, tradeCount, tradeCashDelta, transferFeeEarned, welfareContribution,
+    roleCounts, squad: [{...player, source:'EXISTING'|'PURCHASED'|'TRADED', price}],
     balanceScore, rankReason
   }]
 }
 ```
 
-Money fields use two-decimal precision so per-team totals stay additive. A retained player has
-`source: 'EXISTING'` and its price is the retention cost (Mega slab or existing Mini contract fee).
+`trades` rows spread the full EOI record and add `fromName`, `toName`, and `givePlayers`/`getPlayers`
+as `[{ playerId, name, fee }]`. Money fields use two-decimal precision so per-team totals stay additive.
+A retained player has `source: 'EXISTING'` and its price is the retention cost (Mega slab or existing Mini
+contract fee); a BCCI-approved trade acquisition has `source: 'TRADED'` and its exact fixed fee.
 
 Persistence: `backend/data/auction-state.json`, atomic write (temp + rename) after every mutation. Load
-validates `version`, array shapes, unique player ids, no duplicate sold ownership, numeric purses and
-normalises season/rules. Corrupt save → `saveError`, keep the file, no silent reset. Clear old saves before
-moving from custom rules to BCCI seasons; older states contain superseded fields.
+validates `version`, array shapes (including a required `trades` ledger with unique ids and both franchise
+references), an optional `tamperingCases` array, unique player ids, no duplicate sold ownership, numeric
+purses and normalises season/rules. `bcciTradeRevenue` is optional for older saves; the engine fills missing
+trade consent maps, timelines, player `tradeHistory`/`transferFeeEarned` and franchise trade ledgers on
+load. Corrupt save → `saveError`, keep the file, no silent reset. Clear old saves before moving from custom
+rules to BCCI seasons; older states contain superseded fields.
 
 `backend/src/engine.js` exports `AuctionEngine` (`create`, `fromState`, `attach`, `getState`, `dispatch`,
 `tick`), `getNextBid`, `validateBid`, `computeResults` re-export, `SEASONS`, `rulesFor`, `salarySplit`,
-`matchFeeProjection`, `PACE_TICKS`, `PACE_NAMES`.
+`matchFeeProjection`, `PACE_TICKS`, `PACE_NAMES`. `backend/src/season-ops.js` exports `tradeWindows`,
+`activeTradeWindow`, `proposeTrade`, `respondTrade`, `playerConsent`, `amendTrade`, `expireTrades`,
+`reportTampering`, `ruleTampering`, `injurePlayer`, `signInjuryReplacement` and `withdrawPlayer`.
+`backend/src/trade-ai.js` exports `evaluateEoi`, `autoConsent` and `suggestAiTrades` and imports only
+`rules.js`, avoiding a circular dependency with `season-ops.js`.
 
 `backend/src/aiClient.js` exports `createAiClient({ url })` with `decide(ctx)`, plus a `fallbackDecide`
 heuristic when the AI service is unreachable. Private `privateReason` never reaches the engine or UI.
@@ -303,17 +412,22 @@ frontend/app/results/page.jsx     final review
 frontend/app/globals.css          dark charcoal + gold broadcast theme
 frontend/components/*.jsx         SetupScreen, AuctionRoom, AuctioneerPodium, PlayerCard,
                                   BidPanel, FranchiseFloor, EventFeed, ManagementRoom,
-                                  SquadManager, ProceedingsPanel, BreakOverlay, ResultsView, TopBar
+                                  TradeDesk, SquadManager, ProceedingsPanel, BreakOverlay,
+                                  ResultsView, TopBar
 frontend/lib/api.js               fetch helpers against http://localhost:4000
 frontend/lib/narration.js         speechSynthesis wrapper
 frontend/lib/format.js            ₹ crore formatting, season/RTM/retention helpers
 ```
 
 Setup offers the 2025/2026/2027 season picker with the BCCI rules board, then a retention picker limited to
-that franchise's own previous-season contracts. The review step shows capped/uncapped counts, slab costs,
-RTM cards and every rival's plan. `BidPanel` exposes live RTM controls (`USE_RTM`, `PASS_RTM`, `RTM_RAISE`,
-`RTM_DECLINE`, `MATCH_RTM`) when the human franchise is on the clock. `ResultsView` reports the salary cap,
-overseas salary/welfare split, RTM usage, trades and injury/withdrawal entries.
+that franchise's own previous-season contracts (Mini picks honour the ₹18 Cr overseas ceiling). The review
+step shows capped/uncapped counts, slab costs, RTM cards and every rival's plan. `BidPanel` exposes live RTM
+controls (`USE_RTM`, `PASS_RTM`, `RTM_RAISE`, `RTM_DECLINE`, `MATCH_RTM`) when the human franchise is on the
+clock. `TradeDesk` files BUY/SELL/SWAP EOIs, shows the derived exact cash and transfer-fee split, exposes
+accept/reject, consent/veto, amendment and deadline timelines for every EOI, offers `RUN_AI_TRADES` scouting
+and lists integrity rulings. `SquadManager` marks trade acquisitions `TRADED IN` and filters by source.
+`ResultsView` reports the salary cap, overseas salary/welfare split, RTM usage, BCCI trade revenue, detailed
+trade ledger, tampering cases and injury/withdrawal entries.
 
 `lib/api.js`: `getState()`, `postAction(action, payload)`, `getResults()`, `getHealth()`, with
 `NEXT_PUBLIC_API_URL` fallback `http://localhost:4000`. Voice narration is optional and watches

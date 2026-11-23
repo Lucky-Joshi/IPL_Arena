@@ -80,6 +80,7 @@ export function buildRetentionPlan(state, franchiseId, playerIds) {
   const entries = [];
   let total = 0;
   let overseas = 0;
+  let overseasSalary = 0;
   let cappedCount = 0;
   let uncappedCount = 0;
   for (const id of unique) {
@@ -108,7 +109,10 @@ export function buildRetentionPlan(state, franchiseId, playerIds) {
       cappedIndex: cappedCount - 1,
       uncappedIndex: uncappedCount - 1,
     });
-    if (isOverseas(player)) overseas += 1;
+    if (isOverseas(player)) {
+      overseas += 1;
+      overseasSalary += cost;
+    }
     total += cost;
     entries.push({
       playerId: id,
@@ -120,6 +124,10 @@ export function buildRetentionPlan(state, franchiseId, playerIds) {
   }
 
   if (overseas > maxOverseas) return fail(`Retentions would exceed the overseas limit of ${maxOverseas}`);
+  const overseasSalaryCap = numberOr(rules.overseasSalaryCap, 0);
+  if (overseasSalaryCap > 0 && overseasSalary > overseasSalaryCap + 0.000001) {
+    return fail(`Retained overseas contracts of ₹${Math.round(overseasSalary * 100) / 100} Cr breach the ₹${overseasSalaryCap} Cr overseas salary cap`);
+  }
   if (unique.length > maxSquad) return fail(`Retentions would exceed the squad limit of ${maxSquad}`);
   if (unique.length > 0) {
     const reserve = mega ? Math.max(0, minSquadReserve(state, unique.length, reservePerSlot)) : 0;
@@ -281,7 +289,18 @@ export function autoRetainAi(state) {
       plan.push(...pickBest(ownedFor(false), uncappedTarget, franchise));
     } else {
       const target = Math.min((franchise.previousSquad || []).length, 15 + (teamIndex % 3));
-      plan.push(...pickBest(ownedFor(null), target, franchise));
+      // Mini retentions keep the exact contract fee, so overseas picks must
+      // stay inside the ₹18 Cr overseas salary ceiling.
+      const overseasCap = numberOr(rules.overseasSalaryCap, 0);
+      let overseasSalary = 0;
+      plan.push(...pickBest(ownedFor(null), target, franchise).filter((id) => {
+        const player = (state.players || []).find((candidate) => candidate.id === id);
+        if (!player || !isOverseas(player)) return true;
+        const fee = retentionCost(player, { season: state.season });
+        if (overseasCap > 0 && overseasSalary + fee > overseasCap + 0.000001) return false;
+        overseasSalary += fee;
+        return true;
+      }));
     }
     // Apply the whole selection at once: capped slabs and the RTM card count
     // both depend on the complete ordered list, not on each player in isolation.

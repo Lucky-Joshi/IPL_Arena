@@ -78,9 +78,10 @@ final price.
 ### 2026/2027 Mini retentions
 
 Mini auctions keep all eligible previous-season contracts at their **existing contract fees** — there is no
-fixed retention count and no rating slab. Retained players are not mini-auction signings and may be traded
-in the post-auction window. Your additions limit adapts to the retained squad size, while the full bid (not
-just the capped salary) is debited from the purse.
+fixed retention count and no rating slab. Overseas retentions must also fit under the **₹18 Cr overseas
+salary ceiling**; an over-cap selection is rejected before the auction starts. Retained players are not
+mini-auction signings and may be traded in the post-auction window. Your additions limit adapts to the
+retained squad size, while the full bid (not just the capped salary) is debited from the purse.
 
 ### Overseas salary cap and welfare fund
 
@@ -103,12 +104,44 @@ each team and in the final review. Mega auctions have no overseas salary ceiling
 - Accelerated shortlists re-offer unsold players; strategy breaks, management discussions, squad inspection,
   optional browser narration, autosave/resume and a full final report are included.
 
-## Trades, injuries and withdrawals
+## Trades, integrity, injuries and withdrawals
 
-- Two windows: **post-season** (closes one week before the auction; no trading immediately before a Mega)
-  and **post-auction** (opens the day after the auction; mini-auction signings cannot be traded).
-- A trade begins as an EOI and stays pending for 48 hours with player consent required. Player swaps and
-  cash adjustments are supported; `RESPOND_TRADE` approves and executes the move.
+### BCCI trading protocol
+
+The **Trade Desk** tab follows the four-step BCCI approval protocol. The active window is derived from the
+authoritative phase — a caller-supplied `window` is ignored.
+
+- **Post-season** (`POST_SEASON`): Mini `SETUP` after the season, closing one week before the auction. No
+  trading is allowed immediately before a Mega Auction.
+- **Post-auction** (`POST_AUCTION`): `FINAL_REVIEW`/`COMPLETED`, closing 30 days before the tournament.
+  Players bought at the mini auction are frozen until they have played a season.
+
+| Step | Action | Result |
+|---:|---|---|
+| 1 | `PROPOSE_TRADE` files an EOI with the BCCI | `PENDING_48H` / `EOI_SUBMITTED`, 48h `respondBy`; no player moves |
+| 2 | The approached franchise answers with `RESPOND_TRADE` | reject → `REJECTED`; accept → `AWAITING_CONSENT` / `AWAITING_PLAYER_CONSENT`, 72h `consentBy` |
+| 3 | Terms are negotiated with `AMEND_TRADE`; every player signs via `PLAYER_TRADE_CONSENT` | any veto → `VETOED`; all consent → BCCI vetting |
+| 4 | The BCCI checks salary caps, squad limits, purse and integrity flags | `BCCI_REVIEW` → `APPROVED` / `BCCI_APPROVED` or `REJECTED` / `BCCI_REJECTED` |
+
+Every EOI carries an audit `timeline[]`, its consent map and real deadlines. A response or consent that
+passes its deadline lapses to `EXPIRED` / `NOT_APPROVED` on the next tick or dispatch, even in `SETUP`.
+Human players sign their own consent; AI-owned players use need-based heuristics in `trade-ai.js`.
+`RUN_AI_TRADES` (limit 1–4) is human-triggered only and every rival proposal still passes the same engine
+validation — no deal is auto-filed when a phase changes.
+
+**Deal types and money.** `ALL_CASH` covers a one-way sale; `PLAYER_SWAP` exchanges equal-fee players;
+`CASH_PLUS_PLAYER` settles the exact salary difference in cash. Fees are fixed contracts and are never
+renegotiated: the cash is derived from the players' exact league salaries and a mismatched `cash` value is
+rejected. The side receiving the higher-salary package pays the difference from its purse; an unfunded
+deal is blocked. An optional **off-purse transfer fee** is allowed only on all-cash deals: 50% to the BCCI,
+up to 50% of the remainder to the player, and the rest to the selling franchise.
+
+**Anti-tampering.** Contact outside the official EOI channel is reportable with `REPORT_TAMPERING`. An
+upheld `RULE_TAMPERING` ruling can fine and deduct the offender's purse and ban the player for up to one
+season; banned players cannot be included in a trade. Every ruling is retained in the final report.
+
+### Injuries and withdrawals
+
 - A certified injury lets a franchise sign a replacement from the Registered Available Player Pool (RAPP)
   within the injured player's salary, without debiting the purse.
 - An uncertified pre-season withdrawal removes the player and applies a ban for up to two seasons.
@@ -124,10 +157,12 @@ cd frontend && npm run build
 Or run all three with `cmd /c verify.cmd`.
 
 `backend/scripts/smoke-test.js` boots isolated AI and backend processes and drives complete Mega and Mini
-auctions over HTTP. It covers real season finances, own-contract retentions and capped/uncapped slabs,
-RTM offer/counter/match and pass flows, salary splitting and the welfare fund, overseas cap, trades and
-consent, RAPP replacements, withdrawal bans, early human bids, BROADCAST dwell timing, bidding wars,
-breaks, save/resume, accelerated rounds and final results.
+auctions over HTTP. It covers real season finances, own-contract retentions and capped/uncapped slabs
+(including the Mini overseas retention ceiling), RTM offer/counter/match and pass flows, salary splitting
+and the welfare fund, overseas cap, all three trade deal types, the full four-step approval protocol,
+transfer-fee splitting, negotiation, veto, expiry, cap/purse blocks, anti-tampering and rival scouting,
+RAPP replacements, withdrawal bans, early human bids, BROADCAST dwell timing, bidding wars, breaks,
+save/resume, accelerated rounds and final results.
 
 `ai/test_ai.py` (18 tests) verifies season context, capped/uncapped status and contract fees, overseas
 salary-cap decisions, RTM context, role/purse/age behaviour and the HTTP contract.
