@@ -49,6 +49,12 @@ cd frontend && npm install && npm run dev
 The backend falls back to a local heuristic if the AI service is briefly unavailable, so a live auction
 never deadlocks.
 
+## Deploy
+
+The frontend is on Vercel; the backend and AI are Render web services. See [DEPLOYMENT.md](DEPLOYMENT.md)
+for the full Vercel + Render guide, `render.yaml` blueprint, env-var reference and verification checklist.
+Template env files live at `frontend/.env.example`, `backend/.env.example` and `ai/.env.example`.
+
 ## Season cycle (BCCI 2025–2027)
 
 | Season | Format | Auction purse | Total salary cap | Overseas salary cap | Retentions | RTM |

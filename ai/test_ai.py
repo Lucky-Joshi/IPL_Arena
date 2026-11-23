@@ -13,19 +13,21 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 try:  # direct script execution (python ai/test_ai.py)
     from analysis import analyze
-    from server import HEALTH, create_server
+    from server import HEALTH, PORT, create_server, resolve_port
     from valuation import decide, make_decision, value_player
 except ImportError:  # pragma: no cover - imported as ai.test_ai
     from .analysis import analyze
-    from .server import HEALTH, create_server
+    from .server import HEALTH, PORT, create_server, resolve_port
     from .valuation import decide, make_decision, value_player
 
 
@@ -376,6 +378,23 @@ class BcciRulesTests(unittest.TestCase):
             set(result),
             {"action", "amount", "confidence", "publicComment", "privateReason"},
         )
+
+
+class PortResolutionTests(unittest.TestCase):
+    def test_render_port_takes_precedence(self):
+        env = {"PORT": "8123", "AI_PORT": "5001"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(resolve_port(), 8123)
+
+    def test_ai_port_fallback_and_default(self):
+        with mock.patch.dict(os.environ, {"AI_PORT": "5001"}, clear=True):
+            self.assertEqual(resolve_port(), 5001)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(resolve_port(), PORT)
+
+    def test_invalid_port_falls_back_to_default(self):
+        with mock.patch.dict(os.environ, {"PORT": "not-a-number"}, clear=True):
+            self.assertEqual(resolve_port(), PORT)
 
 
 class HttpServerTests(unittest.TestCase):

@@ -7,3 +7,7 @@ backend/data/
 *.log
 .DS_Store
 .env*.local
+# Real env files stay local; example templates are tracked.
+.env
+.env.*
+!.env.example

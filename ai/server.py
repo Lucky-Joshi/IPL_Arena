@@ -4,7 +4,8 @@ Run from the workspace root:
 
     python ai/server.py
 
-Routes: GET /health, POST /decide, OPTIONS (CORS).  Binds 0.0.0.0:5000.
+Routes: GET /health, POST /decide, OPTIONS (CORS).  Binds 0.0.0.0 on the port
+from PORT (injected by Render), falling back to AI_PORT, then 5000.
 """
 
 from __future__ import annotations
@@ -146,8 +147,17 @@ def create_server(host: str = HOST, port: int = PORT) -> ThreadingHTTPServer:
     return server
 
 
+def resolve_port() -> int:
+    """Pick the listening port: Render sets PORT, local runs may set AI_PORT."""
+    raw = os.environ.get("PORT") or os.environ.get("AI_PORT") or str(PORT)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return PORT
+
+
 def main() -> None:
-    port = int(os.environ.get("AI_PORT", str(PORT)))
+    port = resolve_port()
     server = create_server(HOST, port)
     sys.stderr.write(f"T20 Dynasty AI listening on {HOST}:{port}\n")
     sys.stderr.flush()
