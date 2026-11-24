@@ -64,6 +64,10 @@ real local values belong in the gitignored `frontend/.env.local`, `backend/.env`
 | **2026** | Mini | ₹125 Cr | ₹151 Cr | ₹18 Cr | unlimited within squad/purse at existing fees | none |
 | **2027** | Mini | ₹130 Cr | ₹157 Cr | ₹18 Cr | unlimited within squad/purse at existing fees | none |
 
+The interface labels Franchise Clawback as **Clawback (RTM)** and shows a live registry on the Trade Desk,
+including card balance and why it is unavailable in Mini seasons. Interactive claw decisions appear in Auction Hall
+only during an actual LCB offer in a 2025 Mega auction.
+
 Shared squad rules: **18–25 players**, **max 8 overseas**, **4 overseas in the Playing XI including the
 X-Factor Substitute**, **₹7.5 lakh match fee** per playing member (₹12.6 Cr projected for 14 league matches),
 and registration base prices of **₹0.3–2 Cr**. Retention charges use five capped slabs

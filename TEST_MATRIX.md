@@ -98,15 +98,17 @@ persistence/break scenarios and smoke invariants.
     a BUY EOI for another franchise's previous-season contract with an optional transfer fee; verify the deal summary shows the
     exact derived league fee, the 50% LCB cut and the player/seller split. Confirm a mismatched cash value is
     rejected and that the traded player appears in your retention picker after approval.
-14. Accept/reject an incoming EOI for F1, then grant consent in the inbox and confirm the approved trade
+14. Confirm the **Clawback (RTM)** registry is visible on the Trade Desk: in Mini it reads `NOT AVAILABLE` with
+    a 2025 Mega link; in Mega it shows your card balance and links to Auction Hall for live decisions.
+15. Accept/reject an incoming EOI for F1, then grant consent in the inbox and confirm the approved trade
     appears in the ledger with its timeline and deadline chips. Repeat with a veto and verify no player moves.
-15. Use `RUN_AI_TRADES` with a 1–4 limit and confirm rival EOIs are filed only in the open window; verify
+16. Use `RUN_AI_TRADES` with a 1–4 limit and confirm rival EOIs are filed only in the open window; verify
     `source:AI` cannot be used from the browser to answer another franchise's EOI. Inspect Squads for the
     `TRADED IN` badge and Results for trade revenue and the integrity panel.
-16. Log a tampering report and rule on it in the integrity unit; confirm a fine/ban is reflected in the final
+17. Log a tampering report and rule on it in the integrity unit; confirm a fine/ban is reflected in the final
     report. Deadline lapsing is deterministic in the automated suite — the browser pass only verifies that
     the real 48h/72h deadlines are displayed.
-17. In the RPP panel, report a certified injury on one of your contracted players, sign an available player
+18. In the RPP panel, report a certified injury on one of your contracted players, sign an available player
     within the budget and confirm no purse debit. Verify an uncertified withdrawal bans the player for two
-    seasons. In the command desk, confirm the Clawback card count in Mega (and "Mini · not available" in Mini)
-    and the X-Factor paid-places readout.
+    seasons. In the command desk, confirm the Clawback card count in Mega (and "Mega only · none" in Mini)
+    and the X-Factor paid-places readout (labelled `CLAWBACK (RTM)`).

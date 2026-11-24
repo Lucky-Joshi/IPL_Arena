@@ -108,8 +108,8 @@ export default function BidPanel({ state, player, onAction, busy }) {
         <div><span>RESERVE</span><strong>{cr(reserve)}</strong></div>
         <div><span>STATUS</span><strong className={`status-${String(me.biddingStatus || 'IDLE').toLowerCase()}`}>{me.biddingStatus || 'IDLE'}</strong></div>
         <div>
-          <span>CLAWBACK</span>
-          <strong>{clawAvailable ? `${clawCards} card${clawCards === 1 ? '' : 's'} left` : 'Mini · not available'}</strong>
+          <span>CLAWBACK (RTM)</span>
+          <strong>{clawAvailable ? `${clawCards} card${clawCards === 1 ? '' : 's'} left` : 'Mega only · none'}</strong>
         </div>
         <div>
           <span>X-FACTOR SUBSTITUTE</span>
@@ -120,7 +120,7 @@ export default function BidPanel({ state, player, onAction, busy }) {
       {state.claw && CLAW_PHASES.includes(state.phase) && (
         <div className={`claw-panel ${isClawTurn ? 'is-my-turn' : ''}`} role="group" aria-label="Franchise Clawback decision">
           <div className="claw-heading">
-            <span>FRANCHISE CLAWBACK</span>
+            <span>FRANCHISE CLAWBACK (RTM)</span>
             <strong>{cr(state.claw.price)}</strong>
           </div>
           <p className="claw-detail">

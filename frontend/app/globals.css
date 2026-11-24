@@ -1312,6 +1312,17 @@ small {
   letter-spacing: 0.04em;
 }
 
+.ribbon-link {
+  color: var(--gold);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+}
+
+.ribbon-link:hover {
+  text-decoration: underline;
+}
+
 .tab-bar {
   display: flex;
   gap: 6px;

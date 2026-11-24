@@ -336,9 +336,9 @@ export default function SetupScreen() {
             ) : (
               <a className="btn btn-primary" href="/auction">Resume auction →</a>
             )}
-            {savedTradeOpen && (
-              <a className="btn btn-ghost" href="/auction?tab=trades">Open Trade Desk →</a>
-            )}
+            <a className="btn btn-ghost" href="/auction?tab=trades">
+              {savedTradeOpen ? 'Open Trade Desk →' : 'View Trade Desk →'}
+            </a>
             <span className="resume-note">
               Your franchise: {saved.state.franchises?.find((f) => f.id === saved.state.userFranchiseId)?.name || '—'}
             </span>

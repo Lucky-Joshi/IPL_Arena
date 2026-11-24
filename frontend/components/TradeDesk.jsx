@@ -379,6 +379,8 @@ export default function TradeDesk({ state, onAction, busy }) {
   const mine = franchiseById(state, me);
   const windowInfo = tradeWindowInfo(state);
   const window = windowInfo.window;
+  const clawAvailable = Boolean(state.rules?.clawAvailable);
+  const myClawCards = Number(mine?.clawCards || 0);
 
   const [counterpartyId, setCounterpartyId] = useState('');
   const [mode, setMode] = useState('BUY');
@@ -457,6 +459,32 @@ export default function TradeDesk({ state, onAction, busy }) {
             Your purse: <strong>{cr(mine.purse)}</strong>
             {Number(mine.tradeCashDelta) !== 0 && <small> · net trade cash {Number(mine.tradeCashDelta) > 0 ? 'received' : 'paid'} {cr(Math.abs(Number(mine.tradeCashDelta)))}</small>}
             {Number(mine.transferFeeEarned) > 0 && <small> · transfer fees earned {cr(mine.transferFeeEarned)}</small>}
+          </p>
+        )}
+      </section>
+
+      <section className="panel claw-registry">
+        <div className="panel-heading">
+          <h3>Franchise Clawback (RTM)</h3>
+          <span className="panel-tag">
+            {clawAvailable ? `${myClawCards} CARD${myClawCards === 1 ? '' : 'S'}` : 'NOT AVAILABLE'}
+          </span>
+        </div>
+        {clawAvailable ? (
+          <p className="balance-note">
+            Your right-to-match balance is <strong>{myClawCards}</strong>. When one of your former contract
+            players is sold to a rival, the LCB offers you a claw at the current price. The decision appears on{' '}
+            <Link className="inline-link" href="/auction">Auction Hall →</Link>.
+          </p>
+        ) : (
+          <p className="balance-note">
+            Clawback (RTM) is a <strong>2025 Mega</strong> rule. This is {state.season} {state.format}, so no cards
+            are issued. <Link className="inline-link" href="/">Create a 2025 Mega auction →</Link>
+          </p>
+        )}
+        {state.claw && (
+          <p className="balance-note">
+            <Link className="inline-link" href="/auction">A claw offer is live — open Auction Hall now →</Link>
           </p>
         )}
       </section>

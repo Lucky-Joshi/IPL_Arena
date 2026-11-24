@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { getState, postAction } from '../../lib/api';
 import AuctionRoom from '../../components/AuctionRoom';
 import ManagementRoom from '../../components/ManagementRoom';
@@ -23,6 +23,7 @@ const TABS = [
 ];
 
 function AuctionPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const requestedTab = searchParams.get('tab');
   const [state, setState] = useState(null);
@@ -39,7 +40,7 @@ function AuctionPageContent() {
   useAuctioneerVoice(state);
 
   useEffect(() => {
-    if (requestedTab === 'trades') setTab('trades');
+    setTab(requestedTab === 'trades' ? 'trades' : 'room');
   }, [requestedTab]);
 
   const notify = useCallback((message, kind = 'error') => {
@@ -173,6 +174,8 @@ function AuctionPageContent() {
         <span className="ribbon-spacer" />
         <span className="ribbon-hint">B = bid · W = withdraw</span>
         <span className="ribbon-divider">|</span>
+        <Link className="ribbon-link" href="/auction?tab=trades">TRADE DESK →</Link>
+        <span className="ribbon-divider">|</span>
         <span className="ribbon-clock">{state.clockRunning ? 'CLOCK RUNNING' : 'CLOCK PAUSED'}</span>
       </div>
 
@@ -189,7 +192,10 @@ function AuctionPageContent() {
             key={item.id}
             type="button"
             className={`tab-button ${tab === item.id ? 'is-active' : ''}`}
-            onClick={() => setTab(item.id)}
+            onClick={() => {
+              setTab(item.id);
+              router.replace(item.id === 'trades' ? '/auction?tab=trades' : '/auction');
+            }}
             aria-pressed={tab === item.id}
           >
             {item.label}
