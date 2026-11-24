@@ -47,24 +47,14 @@ tests, backend end-to-end smoke tests, Next.js production build.
 | 39 | CLAW bid history entries are settlement records | smoke-test invariant skip of `CLAW*` bid sources |
 | 40 | Overseas bid above ₹18 Cr splits salary/welfare | smoke-test — ₹25 Cr → ₹18 Cr salary, ₹7 Cr welfare, full purse debit |
 | 41 | Match-fee projection ₹12.6 Cr | smoke-test `matchFeeProjection('2025')` assertion |
-| 42 | Trade windows derive from phase, not request body | smoke-test — live auction rejected, Mega and Mini `SETUP` = `POST_SEASON`, `COMPLETED` = `POST_AUCTION` |
-| 43 | Four-step LCB approval and audit trail | smoke-test — `PROPOSE_TRADE` → `PENDING_48H`/`EOI_SUBMITTED`, `RESPOND_TRADE` → `AWAITING_CONSENT`, consent → `LCB_REVIEW` → `APPROVED`/`LCB_APPROVED`, `timeline[]` populated |
-| 44 | `ALL_CASH` settles exact fixed league fees | smoke-test — derived `cash`, ±`tradeCashDelta`, buyer/seller purse and `previousFranchiseId`, no purse impact from transfer fee |
-| 45 | `PLAYER_SWAP` / `CASH_PLUS_PLAYER` classification | smoke-test — multi-player equal-fee swap moves no cash; unequal fees derive the exact difference and reject a mismatched `cash` |
-| 46 | Off-purse transfer-fee split | smoke-test — LCB 50%, player share of the remainder, seller balance; `lcbTradeRevenue`, `transferFeeEarned` and player share reconcile |
-| 47 | Player consent and veto | smoke-test — human signs `PLAYER_TRADE_CONSENT`; a veto → `VETOED`/`NOT_APPROVED` with no player move; withheld consent and banned players blocked at EOI |
-| 48 | `AMEND_TRADE` renegotiation | smoke-test — transfer fee and player share change while consent stays pending; fixed league cash is recomputed, never negotiated |
-| 49 | 48h response / 72h consent expiry | smoke-test — past deadlines lapse on dispatch and on `tick()` in `SETUP`, with `EXPIRED`/`NOT_APPROVED` |
-| 50 | LCB vetting of squad, cap and purse limits | smoke-test — mini signings frozen post-auction, undersized/over-limit squads and unfunded deals rejected before execution |
-| 51 | Anti-tampering reporting and rulings | smoke-test — `REPORT_TAMPERING` + upheld `RULE_TAMPERING` fine the purse, ban the player and block subsequent trades |
-| 52 | AI trading is need- and budget-based | smoke-test — `RUN_AI_TRADES` (1–4, human-triggered) files only legal `POST_SEASON`/`POST_AUCTION` EOIs; `trade-ai.js` has no state mutation |
-| 53 | HTTP trade/integrity actions and ownership | smoke-test — `RUN_AI_TRADES`, `RESPOND_TRADE`, `REPORT_TAMPERING`, `RULE_TAMPERING`; `source:AI` cannot impersonate an AI franchise over HTTP |
-| 54 | RPP replacement within injured salary, no purse debit | smoke-test `scenarioSalaryAndSeasonOps` — `isRppReplacement`, purse unchanged |
-| 55 | Uncertified withdrawal applies two-season ban | smoke-test — `banUntilSeason === '2028'` for 2026 |
-| 56 | Results report caps, welfare, CLAW, trades, injuries | smoke-test — `source:'TRADED'`, enriched trade rows, `tradedInCount`/`tradedOutCount`, `lcbTradeRevenue`, `tamperingCases`; `ai/test_ai.py` (18 tests) |
-| 57 | Money totals reconcile at two decimals | smoke-test `totalSpent === totalAuctionSpending`, `purseSpent = retentionSpent + auctionSpent − tradeCashDelta` |
-| 58 | Retention/season/Trade Desk UI reflects LCB rules | frontend `SetupScreen`, `BidPanel`, `TradeDesk`, `SquadManager`, `ResultsView`; production build |
-| 59 | Clawback/X-Factor readouts and RPP controls are visible | `BidPanel` command desk, `TradeDesk` RPP panel; smoke-test injury/replacement/withdrawal actions; production build |
+| 42 | Anti-tampering reporting and rulings | smoke-test — `REPORT_TAMPERING` + upheld `RULE_TAMPERING` fine the purse, ban the player and record the ruling |
+| 43 | HTTP integrity actions | smoke-test `scenarioAccelerationAndResults` — `REPORT_TAMPERING` + `RULE_TAMPERING` round-trip over HTTP |
+| 44 | RPP replacement within injured salary, no purse debit | smoke-test `scenarioSalaryAndSeasonOps` — `isRppReplacement`, purse unchanged |
+| 45 | Uncertified withdrawal applies two-season ban | smoke-test — `banUntilSeason === '2028'` for 2026 |
+| 46 | Results report caps, welfare, CLAW, injuries | smoke-test — `tamperingCases`, `injuries`, `welfareFund`; `ai/test_ai.py` (18 tests) |
+| 47 | Money totals reconcile at two decimals | smoke-test `totalSpent === totalAuctionSpending`, `purseSpent + purseRemaining = startingPurse` |
+| 48 | Retention/season UI reflects LCB rules | frontend `SetupScreen`, `BidPanel`, `SquadManager`, `ResultsView`; production build |
+| 49 | Clawback/X-Factor readouts; RPP, withdrawal and integrity backend coverage | `BidPanel` command desk shows CLAW/X-Factor; RPP, withdrawal and tampering have no dedicated UI after the Trade Desk tab removal — covered by smoke-test backend actions; production build |
 
 Edge cases: low purse, squad cap, overseas cap, no interested franchise, all AI withdrawn, human leading,
 human withdrawing, break during active lot, reload during bidding war — covered by validation checks, the
@@ -89,26 +79,12 @@ persistence/break scenarios and smoke invariants.
 9. Create a **2026 Mini**, retain several contracts, verify no CLAW controls and the adaptive additions cap.
    Let an overseas player sell above ₹18 Cr and check the welfare line in the final report.
 10. Let the auction run to the accelerated round and final review; check salary caps, overseas/welfare
-    split, CLAW usage, trades and injury/withdrawal reporting for all ten franchises.
+    split, CLAW usage and injury/withdrawal reporting for all ten franchises.
 11. Reload mid-bidding war; use Resume to confirm state restored.
 12. For a **2026 Mini**, retain contracts within the ₹18 Cr overseas ceiling; try an over-cap selection and
     confirm the rules engine rejects it with the overseas-cap message.
-13. Open the **Trade Desk** in `SETUP` before retentions (Mega or Mini) — use the top-nav Trade Desk link or
-    the setup/retention link, both of which land on `/auction?tab=trades`. Confirm the **OPEN** badge, then file
-    a BUY EOI for another franchise's previous-season contract with an optional transfer fee; verify the deal summary shows the
-    exact derived league fee, the 50% LCB cut and the player/seller split. Confirm a mismatched cash value is
-    rejected and that the traded player appears in your retention picker after approval.
-14. Confirm the **Clawback (RTM)** registry is visible on the Trade Desk: in Mini it reads `NOT AVAILABLE` with
-    a 2025 Mega link; in Mega it shows your card balance and links to Auction Hall for live decisions.
-15. Accept/reject an incoming EOI for F1, then grant consent in the inbox and confirm the approved trade
-    appears in the ledger with its timeline and deadline chips. Repeat with a veto and verify no player moves.
-16. Use `RUN_AI_TRADES` with a 1–4 limit and confirm rival EOIs are filed only in the open window; verify
-    `source:AI` cannot be used from the browser to answer another franchise's EOI. Inspect Squads for the
-    `TRADED IN` badge and Results for trade revenue and the integrity panel.
-17. Log a tampering report and rule on it in the integrity unit; confirm a fine/ban is reflected in the final
-    report. Deadline lapsing is deterministic in the automated suite — the browser pass only verifies that
-    the real 48h/72h deadlines are displayed.
-18. In the RPP panel, report a certified injury on one of your contracted players, sign an available player
-    within the budget and confirm no purse debit. Verify an uncertified withdrawal bans the player for two
-    seasons. In the command desk, confirm the Clawback card count in Mega (and "Mega only · none" in Mini)
+13. In the Auction Hall command desk, confirm the Clawback card count in Mega (and "Mega only · none" in Mini)
     and the X-Factor paid-places readout (labelled `CLAWBACK (RTM)`).
+
+RPP injuries/replacements, withdrawals and tampering rulings have no dedicated UI tab after the Trade Desk
+removal; their backend actions are exercised directly by the smoke suite.

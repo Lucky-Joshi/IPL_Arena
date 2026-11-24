@@ -18,7 +18,6 @@ import {
   SEASON_OPTIONS,
   seasonOption,
   strategyLabel,
-  tradeWindowInfo,
 } from '../lib/format';
 
 // Only these four values are tunable. Purse, squad, salary and retention
@@ -82,7 +81,7 @@ export default function SetupScreen() {
   const [created, setCreated] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [retentionStep, setRetentionStep] = useState('trade');
+  const [retentionStep, setRetentionStep] = useState('pick');
   const [selectedRetentionIds, setSelectedRetentionIds] = useState([]);
   const [retentionRole, setRetentionRole] = useState('ALL');
   const [retentionFeedback, setRetentionFeedback] = useState('');
@@ -98,14 +97,12 @@ export default function SetupScreen() {
         setSaved(snapshot);
         const savedState = snapshot.state;
         if (savedState?.userFranchiseId) setSelectedId(savedState.userFranchiseId);
-        // Returning from the Trade Desk must show the refreshed contract list:
-        // a pre-retention trade changes previousFranchiseId on the server.
         if (savedState?.phase === 'SETUP') {
           setCreated(savedState);
           const mine = savedState.franchises?.find((entry) => entry.id === savedState.userFranchiseId);
           const retained = (mine?.retentions || []).map((entry) => entry.playerId);
           setSelectedRetentionIds(retained);
-          setRetentionStep(retained.length ? 'review' : 'trade');
+          setRetentionStep(retained.length ? 'review' : 'pick');
         }
       })
       .catch(() => {
@@ -174,7 +171,7 @@ export default function SetupScreen() {
       });
       if (action === 'CREATE') {
         setCreated(result.state);
-        setRetentionStep('trade');
+        setRetentionStep('pick');
         setSelectedRetentionIds([]);
         setRetentionRole('ALL');
         setRetentionFeedback('');
@@ -263,7 +260,6 @@ export default function SetupScreen() {
   };
 
   const createdMine = created?.franchises?.find((entry) => entry.id === created.userFranchiseId);
-  const savedTradeOpen = Boolean(saved?.state && tradeWindowInfo(saved.state).open);
   const plan = retentionPlan(created, orderedSelection);
   const retentionMax = retentionLimit(created);
   const runningCost = plan.total;
@@ -336,9 +332,6 @@ export default function SetupScreen() {
             ) : (
               <a className="btn btn-primary" href="/auction">Resume auction →</a>
             )}
-            <a className="btn btn-ghost" href="/auction?tab=trades">
-              {savedTradeOpen ? 'Open Trade Desk →' : 'View Trade Desk →'}
-            </a>
             <span className="resume-note">
               Your franchise: {saved.state.franchises?.find((f) => f.id === saved.state.userFranchiseId)?.name || '—'}
             </span>
@@ -502,33 +495,14 @@ export default function SetupScreen() {
             <div className="modal-header">
               <div>
                 <span className="eyebrow">AUCTION CREATED · PHASE: SETUP</span>
-                <h2>
-                  {retentionStep === 'trade'
-                    ? 'Trade before you retain'
-                    : retentionStep === 'pick'
-                      ? 'Choose your retentions'
-                      : 'Retentions locked in'}
-                </h2>
+                <h2>{retentionStep === 'pick' ? 'Choose your retentions' : 'Retentions locked in'}</h2>
               </div>
               <button type="button" className="modal-close" onClick={() => setCreated(null)} aria-label="Close preview">
                 ×
               </button>
             </div>
 
-            {retentionStep === 'trade' ? (
-              <div className="modal-body">
-                <p className="modal-lead">
-                  <strong>Step 1 — the post-season trading window is open.</strong> Reshape the previous-season
-                  contract lists before you retain anyone. Deals filed now move contracts to their new owner, and
-                  your retention picker refreshes as soon as you return.
-                </p>
-                <p className="balance-note">
-                  Your franchise: <strong>{createdMine?.name || '—'}</strong> ·{' '}
-                  <strong>{createdMine?.previousSquad?.length || 0}</strong> previous-season contracts
-                  {isMegaAuction && <> · unused retention slots become Clawback cards</>}.
-                </p>
-              </div>
-            ) : retentionStep === 'pick' ? (
+            {retentionStep === 'pick' ? (
               <div className="modal-body">
                 <p className="modal-lead">
                   <strong>{createdMine?.name || 'Your franchise'}</strong> can only retain players from its
@@ -543,11 +517,6 @@ export default function SetupScreen() {
                     <>Keep as many as you like at their existing contract fees. There is no Franchise Clawback in a Mini Auction.</>
                   )}
                 </p>
-                <p className="balance-note">
-                  Need one more deal before you lock this in? <a href="/auction?tab=trades">Open the Trade Desk →</a>{' '}
-                  approved moves appear in this picker as soon as you return.
-                </p>
-
                 <div className="retention-meter">
                   <div><span>SELECTED</span><strong>{plan.entries.length}{isMegaAuction ? `/${retentionMax}` : ''}</strong></div>
                   {isMegaAuction && (
@@ -659,17 +628,10 @@ export default function SetupScreen() {
 
             {error && <div className="inline-error modal-error">{error}</div>}
             <div className="modal-actions">
-              {retentionStep === 'trade' ? (
+              {retentionStep === 'pick' ? (
                 <>
-                  <button type="button" className="btn btn-ghost" onClick={() => setRetentionStep('pick')}>
-                    Skip trading →
-                  </button>
-                  <a className="btn btn-primary" href="/auction?tab=trades">Open Trade Desk →</a>
-                </>
-              ) : retentionStep === 'pick' ? (
-                <>
-                  <button type="button" className="btn btn-ghost" onClick={() => setRetentionStep('trade')}>
-                    Back to trading
+                  <button type="button" className="btn btn-ghost" onClick={() => setCreated(null)}>
+                    Keep in setup
                   </button>
                   <button type="button" className="btn btn-primary" onClick={handleConfirmRetentions} disabled={busy}>
                     {busy

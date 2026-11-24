@@ -8,9 +8,9 @@ Clawback (CLAW)** is the invented retention claim used in the 2025 Mega Auction.
 
 | Service | Dir | Port | Stack | Responsibility |
 |---|---|---|---|---|
-| Frontend | `frontend/` | 3000 | Next.js (JS/JSX) | Setup, auction hall, war room, Trade Desk, squads, results, voice narration |
-| Backend | `backend/` | 4000 | Node 24, built-in `http` (zero deps) | Authoritative engine, validation, persistence, proceedings, season rules, LCB trading and integrity |
-| AI | `ai/` | 5000 | Python 3 stdlib `http.server` (zero deps) | Private valuations, live-lot bid decisions, public commentary (no off-auction trade decisions) |
+| Frontend | `frontend/` | 3000 | Next.js (JS/JSX) | Setup, auction hall, war room, squads, results, voice narration |
+| Backend | `backend/` | 4000 | Node 24, built-in `http` (zero deps) | Authoritative engine, validation, persistence, proceedings, season rules and integrity |
+| AI | `ai/` | 5000 | Python 3 stdlib `http.server` (zero deps) | Private valuations, live-lot bid decisions and public commentary |
 
 Runner scripts live at the root (`run-all.cmd`, `verify.cmd`). `npm test` in `backend/` starts isolated
 backend and AI processes and runs the smoke suite.
@@ -30,12 +30,6 @@ PHASE = 'SETUP' | 'OPENING' | 'PLAYER_INTRODUCTION' | 'BIDDING' | 'GOING_ONCE'
       | 'SOLD' | 'UNSOLD' | 'SET_BREAK' | 'STRATEGY_BREAK'
       | 'ACCELERATED_AUCTION' | 'FINAL_REVIEW' | 'COMPLETED'
 STAGE_KIND = 'ANNOUNCEMENT' | 'SET' | 'BREAK' | 'ACCELERATED' | 'REVIEW'
-DEAL_TYPE = 'ALL_CASH' | 'PLAYER_SWAP' | 'CASH_PLUS_PLAYER'
-TRADE_STATUS = 'PENDING_48H' | 'AWAITING_CONSENT' | 'LCB_REVIEW' | 'APPROVED'
-            | 'REJECTED' | 'EXPIRED' | 'VETOED'
-TRADE_APPROVAL = 'EOI_SUBMITTED' | 'AWAITING_PLAYER_CONSENT' | 'LCB_REVIEW'
-              | 'LCB_APPROVED' | 'LCB_REJECTED' | 'NOT_APPROVED'
-CONSENT = 'PENDING' | 'GRANTED' | 'DENIED'
 ```
 
 Money is always a number in **crore INR** (e.g. `12.5` = ₹12.5 Cr). Display formatting is the frontend's job.
@@ -86,9 +80,7 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
   bidsThisLot: 0,
   claw: null,                       // live Franchise Clawback offer, see below
   clawLog: [ { playerId, step, franchiseId, price } ],
-  trades: [ Trade ],                 // authoritative LCB EOI ledger
   tamperingCases: [ TamperingCase ],  // integrity allegations + rulings
-  lcbTradeRevenue: 0,                // cumulative off-purse transfer-fee share
   welfareFund: 0,
   matchFeeProjection: 12.6,
   phaseTicks: 0, stageTicks: 0, aiWaitTicks: 0, goingStage: 0, resultTicks: 0,
@@ -100,29 +92,6 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
   conversations: [ { id, at, franchiseId, author, text, tone } ],
   announcement: { id, text, kind },
   result: null                     // computed in FINAL_REVIEW
-}
-```
-
-`Trade` (append-only EOI record; `status` is the protocol stage, `approval` is the LCB decision label):
-```js
-{
-  id: 'trade_001',
-  type: 'ALL_CASH' | 'PLAYER_SWAP' | 'CASH_PLUS_PLAYER',
-  fromFranchiseId, toFranchiseId,
-  givePlayerIds: [playerId], getPlayerIds: [playerId],
-  valueGiven, valueGot,             // exact fixed-fee sums
-  cash,                             // magnitude of the settlement
-  cashAdjustment,                   // signed from the proposer's view: + = proposer pays
-  transferFee: null | {
-    total, playerSharePct, lcbCut, playerAmount, sellerAmount,
-    payerId, sellerId, players: [{ playerId, amount }]
-  },
-  window: 'POST_SEASON' | 'POST_AUCTION',
-  status, approval,
-  createdAt, respondBy, consentBy, executedAt,
-  consents: { [playerId]: CONSENT },
-  timeline: [{ at, status, note }],
-  rejectionReason?: string
 }
 ```
 
@@ -143,14 +112,11 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
   battingStyle, bowlingStyle, stats: {...},
   experience, category, availability,
   soldTo, soldPrice, soldRound, salary, welfareContribution,
-  auctionRoundBought: 'MEGA'|'MINI'|null, purchasedInMini: boolean,
+  auctionRoundBought: 'MEGA'|'MINI'|null,
   retained: boolean, retentionCost: number, retentionCandidate: boolean,
   injured: boolean, withdrawn: boolean, banUntilSeason: string|null,
   replacedBy: string|null, isRppReplacement: boolean,
-  consentWithheld: boolean, tamperingBan: boolean,
-  traded: boolean,
-  tradeHistory: [{ tradeId, from, to, at, fee }],
-  transferFeeEarned: number
+  tamperingBan: boolean
 }
 ```
 
@@ -166,11 +132,6 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
   overseasSalarySpend, welfareContribution,
   purchases: [{ playerId, price, salary, welfare, round, source }],
   rejected: [playerId],
-  trades: [{ playerId, direction: 'IN'|'OUT', with: franchiseId, tradeId }],
-  tradedIn: [{ playerId, fee, tradeId }],
-  tradedOut: [{ playerId, fee, tradeId }],
-  tradeCashDelta: number,          // cash received is positive; paid is negative
-  transferFeeEarned: number,
   targets, discussions, biddingStatus
 }
 ```
@@ -189,9 +150,8 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
 
 Each franchise starts SETUP with a distinct 15-player `previousSquad` from the 150 `R###` candidates
 (non-overlapping across all ten teams). A player may only be retained by the franchise that holds their
-previous-season contract (`previousFranchiseId === franchise.id` and `retentionCandidate === true`). Released
-contracts enter the shared auction pool. Pre-retention trades move contracts between `previousSquad` lists and
-update `previousFranchiseId`, so CLAW/retention eligibility follows the new owner. `SET_RETENTIONS` validates a
+previous-season contract (`previousFranchiseId === franchise.id` and `retentionCandidate === true`); that contract
+owner also drives CLAW eligibility. Released contracts enter the shared auction pool. `SET_RETENTIONS` validates a
 whole selection against a reset clone; AI franchises use
 `autoRetainAi`, which applies each **complete ordered plan at once** so capped slabs and CLAW cards are
 correct. `START` confirms an empty selection if the user has not picked one.
@@ -221,47 +181,10 @@ price, log, ticks }`.
 `USE_CLAW` decrements `clawCards` and increments `clawUsed` exactly once; passing or matching does not.
 `clawLog` records each step, and the final sale goes through the ordinary salary split and purse debit.
 
-### LCB trading (`backend/src/season-ops.js`, `backend/src/trade-ai.js`)
-
-`activeTradeWindow(state)` is the only source of truth for the open window; a `window` value in an action
-body is ignored. `SETUP` is `POST_SEASON` for **every** season, before retentions are finalized; `FINAL_REVIEW`
-and `COMPLETED` are `POST_AUCTION`. There is no window on the live auction floor. In `POST_SEASON`,
-`canTradePlayer` accepts previous-season contracts from `previousSquad` while they remain `AVAILABLE` and
-unsold; un-retained contracts stay in the auction pool. Active contracts still require `squad` membership and
-`availability === 'SOLD'`. Withheld consent, LCB bans and the mini-signing freeze in `POST_AUCTION` remain
-absolute. Salary ceilings are checked when retentions are submitted and after the auction; pre-retention
-trades still face squad-size, overseas-slot and purse vetting.
-
-The four-step approval protocol:
-
-| Step | Dispatch action | State transition |
-|---:|---|---|
-| 1 | `PROPOSE_TRADE` | append `Trade` with `PENDING_48H` / `EOI_SUBMITTED`, `respondBy = now + 48h`; no player or purse changes |
-| 2 | `RESPOND_TRADE` | reject → `REJECTED` / `NOT_APPROVED`; accept → `AWAITING_CONSENT` / `AWAITING_PLAYER_CONSENT`, `consentBy = now + 72h` |
-| 3 | `AMEND_TRADE`, `PLAYER_TRADE_CONSENT` | renegotiate transfer fee/player lists; each player grants or vetoes. Any `DENIED` → `VETOED` / `NOT_APPROVED` |
-| 4 | internal `vetAndExecute` | `LCB_REVIEW` → `APPROVED` / `LCB_APPROVED`, or `REJECTED` / `LCB_REJECTED` with a reason |
-
-`computeDeal` classifies `ALL_CASH`, `PLAYER_SWAP` (equal fees) or `CASH_PLUS_PLAYER`, and derives
-`cashAdjustment` from the exact fixed salaries. A submitted `cash` must equal its magnitude or the EOI is
-rejected. `validateTradeSquads` checks both post-trade squads for maximum/minimum size, overseas slots,
-total salary cap, Mini overseas salary cap and purse funding. `movePlayer` preserves the fee and contract
-provenance, shifts overseas salary spend to the buyer, appends `tradeHistory` and `tradedIn`/`tradedOut`,
-and records `tradeCashDelta` so `purseSpent = retentionSpent + auctionSpent − tradeCashDelta`.
-
-An off-purse `transferFee` is legal only for `ALL_CASH`: 50% to `state.lcbTradeRevenue`, up to 50% of the
-remainder to the moved player(s), and the balance to `seller.transferFeeEarned`. No purse is debited for it.
-`expireTrades` runs inside every `tick()` before the terminal-phase gate and at the start of `dispatch()`;
-lapsed EOIs/consents become `EXPIRED` / `NOT_APPROVED` with a timeline entry.
-
-`evaluateEoi`, `autoConsent` and `suggestAiTrades` in `trade-ai.js` give the nine rivals deterministic,
-role-gap-aware, budget-checked trading behaviour. The Python service never sees an off-auction trade.
-`RUN_AI_TRADES` generates 1–4 candidate deals that are fed back through `proposeTrade`, so AI proposals
-obey the same window, purse, cap and consent rules. It is human-triggered only; no phase transition files
-a rival EOI automatically.
+### Integrity (`backend/src/season-ops.js`)
 
 Anti-tampering: `REPORT_TAMPERING` records an allegation; `RULE_TAMPERING` either dismisses it or records an
 upheld ruling with an optional purse fine and a ban of up to one season (`banUntilSeason`, `tamperingBan`).
-Banned players cannot be traded.
 
 ### Injuries and withdrawals (`backend/src/season-ops.js`)
 
@@ -301,27 +224,20 @@ only; human franchise only), `START`, `CONTINUE`, `OPEN_BIDDING`, `BID` (`franch
 `WITHDRAW` (`franchiseId`), `USE_CLAW`, `PASS_CLAW`, `CLAW_RAISE`, `CLAW_DECLINE`, `MATCH_CLAW`
 (`franchiseId`).
 
-LCB season operations:
-`PROPOSE_TRADE` (`toFranchiseId, givePlayerIds, getPlayerIds?, cash?, transferFee?, playerSharePct?,
-autoRespond?` — `fromFranchiseId` is forced to `state.userFranchiseId`; `window` is ignored),
-`RESPOND_TRADE` (`tradeId, accept, reason?`), `PLAYER_TRADE_CONSENT` (`tradeId, playerId, consent`),
-`AMEND_TRADE` (`tradeId, givePlayerIds?, getPlayerIds?, transferFee?, playerSharePct?`),
-`RUN_AI_TRADES` (`limit` clamped to 1–4), `REPORT_TAMPERING` (`franchiseId, playerId, details?`),
-`RULE_TAMPERING` (`caseId, upheld, fine?, banSeasons?`), `INJURE_PLAYER` (`playerId`),
-`SIGN_INJURY_REPLACEMENT` (`injuredPlayerId, replacementPlayerId, fee`), `PLAYER_WITHDRAW` (`playerId,
-certifiedInjury`).
+LCB season operations and integrity:
+`REPORT_TAMPERING` (`franchiseId, playerId, details?`), `RULE_TAMPERING` (`caseId, upheld, fine?, banSeasons?`),
+`INJURE_PLAYER` (`playerId`), `SIGN_INJURY_REPLACEMENT` (`injuredPlayerId, replacementPlayerId, fee`),
+`PLAYER_WITHDRAW` (`playerId, certifiedInjury`).
 
 Room control: `CALL_BREAK`, `RESUME_BREAK`, `NEXT`, `PAUSE`, `UNPAUSE`, `NOMINATE` (`playerId,
 selected`), `MEETING`, `RESET`.
 
 Human-controlled actions are gated by `state.userFranchiseId`. The HTTP layer deletes `source` and `auto`
-from those bodies and forces `fromFranchiseId` for `PROPOSE_TRADE`, so a browser client cannot impersonate
-the internal AI orchestration path. `REPORT_TAMPERING` and `RULE_TAMPERING` are LCB integrity operations
-and carry no franchise gate. A `BID` is accepted as soon as a player is on the block; a bid in
-`PLAYER_INTRODUCTION` or `ACCELERATED_AUCTION` opens the floor first, then uses the same `validateBid`
-check as AI bids. Human CLAW decisions must name `state.userFranchiseId`; AI CLAW decisions are resolved on
-`tick()`. Trade deadlines are checked by the clock without a `clockRunning` guard, so a paused auction
-cannot stall a 48h/72h window.
+from those bodies so a browser client cannot impersonate the internal AI orchestration path.
+`REPORT_TAMPERING` and `RULE_TAMPERING` are LCB integrity operations and carry no franchise gate.
+A `BID` is accepted as soon as a player is on the block; a bid in `PLAYER_INTRODUCTION` or
+`ACCELERATED_AUCTION` opens the floor first, then uses the same `validateBid` check as AI bids. Human CLAW
+decisions must name `state.userFranchiseId`; AI CLAW decisions are resolved on `tick()`.
 
 ### Auction pace
 
@@ -342,41 +258,34 @@ authoritative for phase transitions.
 {
   generatedAt, season, seasonLabel, format, rules: {...}, matchFeeProjection, welfareFund,
   totalAuctionSpending, totalRetentionSpending, cappedRetentions, uncappedRetentions,
-  clawUsed, trades, tradeWindows, lcbTradeRevenue, tamperingCases,
+  clawUsed, tamperingCases,
   injuries, soldCount, unsoldCount, biggestPurchases, bestValue, unsold,
   franchises: [{
     id, name, short, primary, owner, rank,
     purseSpent, purseRemaining, salaryCap, salaryHeadroom,
     overseasSalaryCap, overseasSalarySpend, overseasSalaryHeadroom,
     retentionCount, retentionSpent, retentionCappedCount, retentionUncappedCount,
-    playerCount, existingCount, purchasedCount, tradedInCount, tradedOutCount, overseasCount,
-    clawCards, clawUsed, tradeCount, tradeCashDelta, transferFeeEarned, welfareContribution,
-    roleCounts, squad: [{...player, source:'EXISTING'|'PURCHASED'|'TRADED', price}],
+    playerCount, existingCount, purchasedCount, overseasCount,
+    clawCards, clawUsed, welfareContribution,
+    roleCounts, squad: [{...player, source:'EXISTING'|'PURCHASED', price}],
     balanceScore, rankReason
   }]
 }
 ```
 
-`trades` rows spread the full EOI record and add `fromName`, `toName`, and `givePlayers`/`getPlayers`
-as `[{ playerId, name, fee }]`. Money fields use two-decimal precision so per-team totals stay additive.
-A retained player has `source: 'EXISTING'` and its price is the retention cost (Mega slab or existing Mini
-contract fee); a LCB-approved trade acquisition has `source: 'TRADED'` and its exact fixed fee.
+Money fields use two-decimal precision so per-team totals stay additive. A retained player has
+`source: 'EXISTING'` and its price is the retention cost (Mega slab or existing Mini contract fee); an
+auction purchase has `source: 'PURCHASED'` and its winning bid.
 
 Persistence: `backend/data/auction-state.json`, atomic write (temp + rename) after every mutation. Load
-validates `version`, array shapes (including a required `trades` ledger with unique ids and both franchise
-references), an optional `tamperingCases` array, unique player ids, no duplicate sold ownership, numeric
-purses and normalises season/rules. `lcbTradeRevenue` is optional for older saves; the engine fills missing
-trade consent maps, timelines, player `tradeHistory`/`transferFeeEarned` and franchise trade ledgers on
-load. Corrupt save → `saveError`, keep the file, no silent reset. Clear old saves before moving from custom
-rules to LCB seasons; older states contain superseded fields.
+validates `version`, array shapes, an optional `tamperingCases` array, unique player ids, no duplicate sold
+ownership, numeric purses and normalises season/rules. Corrupt save → `saveError`, keep the file, no silent
+reset. Clear old saves before moving from custom rules to LCB seasons; older states contain superseded fields.
 
 `backend/src/engine.js` exports `AuctionEngine` (`create`, `fromState`, `attach`, `getState`, `dispatch`,
 `tick`), `getNextBid`, `validateBid`, `computeResults` re-export, `SEASONS`, `rulesFor`, `salarySplit`,
-`matchFeeProjection`, `PACE_TICKS`, `PACE_NAMES`. `backend/src/season-ops.js` exports `tradeWindows`,
-`activeTradeWindow`, `proposeTrade`, `respondTrade`, `playerConsent`, `amendTrade`, `expireTrades`,
-`reportTampering`, `ruleTampering`, `injurePlayer`, `signInjuryReplacement` and `withdrawPlayer`.
-`backend/src/trade-ai.js` exports `evaluateEoi`, `autoConsent` and `suggestAiTrades` and imports only
-`rules.js`, avoiding a circular dependency with `season-ops.js`.
+`matchFeeProjection`, `PACE_TICKS`, `PACE_NAMES`. `backend/src/season-ops.js` exports `reportTampering`,
+`ruleTampering`, `injurePlayer`, `signInjuryReplacement` and `withdrawPlayer`.
 
 `backend/src/aiClient.js` exports `createAiClient({ url })` with `decide(ctx)`, plus a `fallbackDecide`
 heuristic when the AI service is unreachable. Private `privateReason` never reaches the engine or UI.
@@ -421,7 +330,7 @@ frontend/app/results/page.jsx     final review
 frontend/app/globals.css          dark charcoal + gold broadcast theme
 frontend/components/*.jsx         SetupScreen, AuctionRoom, AuctioneerPodium, PlayerCard,
                                   BidPanel, FranchiseFloor, EventFeed, ManagementRoom,
-                                  TradeDesk, SquadManager, ProceedingsPanel, BreakOverlay,
+                                  SquadManager, ProceedingsPanel, BreakOverlay,
                                   ResultsView, TopBar
 frontend/lib/api.js               fetch helpers against http://localhost:4000
 frontend/lib/narration.js         speechSynthesis wrapper
@@ -432,12 +341,9 @@ Setup offers the 2025/2026/2027 season picker with the LCB rules board, then a r
 that franchise's own previous-season contracts (Mini picks honour the ₹18 Cr overseas ceiling). The review
 step shows capped/uncapped counts, slab costs, CLAW cards and every rival's plan. `BidPanel` exposes live CLAW
 controls (`USE_CLAW`, `PASS_CLAW`, `CLAW_RAISE`, `CLAW_DECLINE`, `MATCH_CLAW`) when the human franchise is on the
-clock. `TradeDesk` files BUY/SELL/SWAP EOIs (including pre-retention previous contracts in every SETUP), shows the
-derived exact cash and transfer-fee split, exposes accept/reject, consent/veto, amendment and deadline
-timelines for every EOI, offers `RUN_AI_TRADES` scouting, manages RPP injuries/replacements/withdrawals and
-lists integrity rulings. `SquadManager` marks trade acquisitions `TRADED IN` and filters by source.
-`ResultsView` reports the salary cap, overseas salary/welfare split, CLAW usage, LCB trade revenue, detailed
-trade ledger, tampering cases and injury/withdrawal entries.
+clock. `SquadManager` lists the current squad with contract values. `ResultsView` reports the salary cap,
+overseas salary/welfare split, CLAW usage, tampering cases and injury/withdrawal entries. RPP injuries,
+withdrawals and integrity rulings have no dedicated UI; their backend actions are covered by the smoke suite.
 
 `lib/api.js`: `getState()`, `postAction(action, payload)`, `getResults()`, `getHealth()`, with
 `NEXT_PUBLIC_API_URL` fallback `http://localhost:4000`. Voice narration is optional and watches

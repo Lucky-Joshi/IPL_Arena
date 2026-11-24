@@ -1,4 +1,3 @@
-import { Suspense } from 'react';
 import './globals.css';
 import TopBar from '../components/TopBar';
 import { NarrationProvider } from '../lib/narration';
@@ -14,9 +13,7 @@ export default function RootLayout({ children }) {
       <body>
         <NarrationProvider>
           <div className="app-shell">
-            <Suspense fallback={<div className="top-bar"><div className="top-bar-inner" /></div>}>
-              <TopBar />
-            </Suspense>
+            <TopBar />
             <main className="app-main">{children}</main>
             <footer className="app-footer">
               <span>T20 Dynasty</span>

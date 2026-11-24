@@ -189,9 +189,6 @@ export function applyRetentionSelection(state, franchiseId, playerIds) {
     // ceiling, so retained overseas contracts must be included.
     player.salary = entry.cost;
     player.auctionRoundBought = rules.format;
-    // A retained contract is not a mini-auction signing and may be traded in
-    // the post-auction window; only fresh purchases carry this flag.
-    player.purchasedInMini = false;
     if (isOverseas(player)) {
       franchise.overseasSalarySpend = Math.round(((Number(franchise.overseasSalarySpend) || 0) + entry.cost) * 100) / 100;
     }
@@ -227,7 +224,6 @@ export function resetRetentions(state) {
     delete player.retentionCost;
     delete player.salary;
     delete player.auctionRoundBought;
-    delete player.purchasedInMini;
   }
   // Legacy saves used `existing` without the `retained` flag.
   if (state.phase === 'SETUP' && !state.retentionsConfirmed) {

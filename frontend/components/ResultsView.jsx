@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { postAction } from '../lib/api';
-import { cappedLabel, cr, formatDateTime, isOverseas, roleColour, roleLabel, ROLES, seasonLabel, tradeStatusLabel, tradeTypeLabel } from '../lib/format';
+import { cappedLabel, cr, formatDateTime, isOverseas, roleColour, roleLabel, ROLES, seasonLabel } from '../lib/format';
 
 function SummaryCard({ label, value, detail }) {
   return (
@@ -179,7 +179,7 @@ export default function ResultsView({ results }) {
                               {player.source || 'EXISTING'}
                             </span>
                           </td>
-                          <td>{player.source === 'PURCHASED' || player.source === 'TRADED' ? cr(player.price) : '—'}</td>
+                          <td>{player.source === 'PURCHASED' ? cr(player.price) : '—'}</td>
                           <td>{cr(player.salary ?? player.price ?? 0)}{Number(player.welfareContribution) > 0 && <small> + {cr(player.welfareContribution)} welfare</small>}</td>
                         </tr>
                       ))}
@@ -216,35 +216,7 @@ export default function ResultsView({ results }) {
 
       <div className="report-columns">
         <section className="panel">
-          <div className="panel-heading"><h3>Trade windows &amp; deals</h3><span className="panel-tag">{results.trades?.length || 0} DEALS</span></div>
-          <ul className="report-list">
-            {(results.tradeWindows || []).map((window) => (
-              <li key={window.id}>
-                <span className="report-list-main"><strong>{window.label}</strong><small>{window.detail}</small></span>
-              </li>
-            ))}
-            {(results.trades || []).map((trade) => (
-              <li key={trade.id}>
-                <span className="report-list-main">
-                  <strong>{trade.fromName || trade.fromFranchiseId} ⇄ {trade.toName || trade.toFranchiseId}</strong>
-                  <small>
-                    {tradeTypeLabel(trade.type)} · {trade.window || '—'}
-                    {trade.givePlayers?.length ? ` · ${trade.fromName || trade.fromFranchiseId} sends ${trade.givePlayers.map((p) => p.name).join(', ')}` : ''}
-                    {trade.getPlayers?.length ? ` · ${trade.toName || trade.toFranchiseId} sends ${trade.getPlayers.map((p) => p.name).join(', ')}` : ''}
-                    {Number(trade.cash) > 0 ? ` · ${cr(trade.cash)} cash` : ''}
-                    {trade.transferFee?.total > 0 ? ` · transfer fee ${cr(trade.transferFee.total)}` : ''}
-                  </small>
-                </span>
-                <span className={`trade-status trade-status-${trade.status === 'APPROVED' ? 'ok' : ['REJECTED', 'VETOED', 'EXPIRED'].includes(trade.status) ? 'bad' : 'pending'}`}>
-                  {tradeStatusLabel(trade.status)}
-                </span>
-              </li>
-            ))}
-            {!results.trades?.length && <li className="report-empty">No trades were registered.</li>}
-          </ul>
-          {Number(results.lcbTradeRevenue) > 0 && (
-            <p className="balance-note">League Control Board transfer-fee revenue: <strong>{cr(results.lcbTradeRevenue)}</strong></p>
-          )}
+          <div className="panel-heading"><h3>Integrity unit</h3><span className="panel-tag">TAMPERING</span></div>
           {(results.tamperingCases || []).length > 0 && (
             <ul className="report-list">
               {results.tamperingCases.map((record) => (
@@ -256,6 +228,9 @@ export default function ResultsView({ results }) {
                 </li>
               ))}
             </ul>
+          )}
+          {!(results.tamperingCases || []).length && (
+            <ul className="report-list"><li className="report-empty">No tampering cases were reported.</li></ul>
           )}
         </section>
 

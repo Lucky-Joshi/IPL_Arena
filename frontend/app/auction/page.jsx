@@ -1,16 +1,14 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
 import { getState, postAction } from '../../lib/api';
 import AuctionRoom from '../../components/AuctionRoom';
 import ManagementRoom from '../../components/ManagementRoom';
 import SquadManager from '../../components/SquadManager';
-import TradeDesk from '../../components/TradeDesk';
 import ProceedingsPanel from '../../components/ProceedingsPanel';
 import BreakOverlay from '../../components/BreakOverlay';
-import { BID_PHASES, cr, phaseLabel, tradeWindowInfo } from '../../lib/format';
+import { BID_PHASES, cr, phaseLabel } from '../../lib/format';
 import { useAuctioneerVoice } from '../../lib/narration';
 
 const POLL_MS = 800;
@@ -18,30 +16,22 @@ const TABS = [
   { id: 'room', label: 'Auction Hall' },
   { id: 'war', label: 'My War Room' },
   { id: 'squads', label: 'Squads' },
-  { id: 'trades', label: 'Trade Desk' },
   { id: 'proceedings', label: 'Proceedings' },
 ];
 
-function AuctionPageContent() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const requestedTab = searchParams.get('tab');
+export default function AuctionPage() {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState('connecting');
   const [toasts, setToasts] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState(requestedTab === 'trades' ? 'trades' : 'room');
+  const [tab, setTab] = useState('room');
   const inFlight = useRef(0);
   const alive = useRef(true);
   const toastCounter = useRef(0);
   const toastTimers = useRef([]);
 
   useAuctioneerVoice(state);
-
-  useEffect(() => {
-    setTab(requestedTab === 'trades' ? 'trades' : 'room');
-  }, [requestedTab]);
 
   const notify = useCallback((message, kind = 'error') => {
     const id = ++toastCounter.current;
@@ -160,7 +150,6 @@ function AuctionPageContent() {
 
   const isBreak = state.phase === 'STRATEGY_BREAK' || state.phase === 'SET_BREAK';
   const isCompleted = state.phase === 'COMPLETED';
-  const tradeInfo = tradeWindowInfo(state);
 
   return (
     <div className="auction-page">
@@ -173,8 +162,6 @@ function AuctionPageContent() {
         <span>{phaseLabel(state.phase)}</span>
         <span className="ribbon-spacer" />
         <span className="ribbon-hint">B = bid · W = withdraw</span>
-        <span className="ribbon-divider">|</span>
-        <Link className="ribbon-link" href="/auction?tab=trades">TRADE DESK →</Link>
         <span className="ribbon-divider">|</span>
         <span className="ribbon-clock">{state.clockRunning ? 'CLOCK RUNNING' : 'CLOCK PAUSED'}</span>
       </div>
@@ -192,16 +179,10 @@ function AuctionPageContent() {
             key={item.id}
             type="button"
             className={`tab-button ${tab === item.id ? 'is-active' : ''}`}
-            onClick={() => {
-              setTab(item.id);
-              router.replace(item.id === 'trades' ? '/auction?tab=trades' : '/auction');
-            }}
+            onClick={() => setTab(item.id)}
             aria-pressed={tab === item.id}
           >
             {item.label}
-            {item.id === 'trades' && tradeInfo.open && (
-              <span className="tab-badge">OPEN</span>
-            )}
           </button>
         ))}
       </nav>
@@ -214,7 +195,6 @@ function AuctionPageContent() {
           <ManagementRoom state={state} onAction={runAction} busy={busy} />
         )}
         {tab === 'squads' && <SquadManager state={state} />}
-        {tab === 'trades' && <TradeDesk state={state} onAction={runAction} busy={busy} />}
         {tab === 'proceedings' && <ProceedingsPanel state={state} />}
       </div>
 
@@ -233,21 +213,5 @@ function AuctionPageContent() {
         ))}
       </div>
     </div>
-  );
-}
-
-export default function AuctionPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="screen-state">
-          <div className="loader" />
-          <h1>Connecting to the Dynasty Auction Hall…</h1>
-          <p>Opening a live channel to the auction engine.</p>
-        </div>
-      }
-    >
-      <AuctionPageContent />
-    </Suspense>
   );
 }

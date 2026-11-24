@@ -132,8 +132,6 @@ async function runTick() {
     await serial(async () => {
       const active = ensureEngine();
       if (!active) return;
-      // No clockRunning guard: trade deadlines must lapse even while the
-      // auction clock is paused or the auction sits in a terminal phase.
       const result = await active.tick();
       if (result?.changed) await flushSave();
     });
@@ -225,8 +223,7 @@ async function dispatchAction(body) {
   const HUMAN_ACTIONS = new Set([
     'BID', 'WITHDRAW', 'SET_RETENTIONS',
     'USE_CLAW', 'PASS_CLAW', 'CLAW_RAISE', 'CLAW_DECLINE', 'MATCH_CLAW',
-    'PROPOSE_TRADE', 'RESPOND_TRADE', 'PLAYER_TRADE_CONSENT', 'AMEND_TRADE',
-    'RUN_AI_TRADES', 'INJURE_PLAYER',
+    'INJURE_PLAYER',
     'SIGN_INJURY_REPLACEMENT', 'PLAYER_WITHDRAW',
   ]);
   if (HUMAN_ACTIONS.has(action)) {
@@ -238,7 +235,6 @@ async function dispatchAction(body) {
     // Human clients must never impersonate the internal AI orchestration path.
     delete body.source;
     delete body.auto;
-    if (action === 'PROPOSE_TRADE') body.fromFranchiseId = requested;
   }
   // REPORT_TAMPERING / RULE_TAMPERING are LCB integrity operations, not
   // franchise decisions, so they carry no franchise-ownership gate.

@@ -24,10 +24,9 @@ const FILTERS = [
     { id: 'OVERSEAS', label: 'Overseas' },
   ] },
   { id: 'source', options: [
-    { id: 'ALL', label: 'Retained + purchased + traded' },
+    { id: 'ALL', label: 'Retained + purchased' },
     { id: 'EXISTING', label: 'Retained' },
     { id: 'PURCHASED', label: 'Purchased' },
-    { id: 'TRADED', label: 'Traded in' },
   ] },
 ];
 
@@ -59,17 +58,6 @@ export default function SquadManager({ state }) {
         });
       }
     }
-    for (const entry of franchise.tradedIn || []) {
-      const player = playerById(state, entry.playerId);
-      if (player && (franchise.squad || []).includes(entry.playerId)) {
-        map.set(entry.playerId, {
-          ...player,
-          source: 'TRADED',
-          price: Number(entry.fee) || Number(player.salary) || 0,
-          round: null,
-        });
-      }
-    }
     return [...map.values()];
   }, [franchise, state]);
 
@@ -87,10 +75,9 @@ export default function SquadManager({ state }) {
   const overseas = entries.filter(isOverseas).length;
   const existingCount = entries.filter((player) => player.source === 'EXISTING').length;
   const purchasedCount = entries.filter((player) => player.source === 'PURCHASED').length;
-  const tradedCount = entries.filter((player) => player.source === 'TRADED').length;
   const auctionSpent = (franchise.purchases || []).reduce((sum, item) => sum + (Number(item.price) || 0), 0);
   const retentionSpent = Number(franchise.retentionSpent) || 0;
-  const spent = retentionSpent + auctionSpent - (Number(franchise.tradeCashDelta) || 0);
+  const spent = retentionSpent + auctionSpent;
   const limit = squadLimit(state, franchise);
   const battingDepth = counts.BATTER + counts.WICKETKEEPER;
   const bowlingDepth = counts.BOWLER + counts.ALLROUNDER;
@@ -124,7 +111,6 @@ export default function SquadManager({ state }) {
           <div><span>PLAYERS</span><strong>{entries.length}/{limit}</strong></div>
           <div><span>EXISTING</span><strong>{existingCount}</strong></div>
           <div><span>PURCHASED</span><strong>{purchasedCount}</strong></div>
-          <div><span>TRADED IN</span><strong>{tradedCount}</strong></div>
           <div><span>OVERSEAS</span><strong>{overseas}/{state.config?.maxOverseas ?? 0}</strong></div>
           <div><span>SPEND</span><strong>{cr(spent)}</strong></div>
           <div><span>AVG RATING</span><strong>{avgRating}</strong></div>
@@ -184,9 +170,9 @@ export default function SquadManager({ state }) {
                   <td>{player.rating}</td>
                   <td>
                     <span className={`source-badge source-${player.source.toLowerCase()}`}>
-                      {player.source === 'EXISTING' ? 'RETAINED'
-                        : player.source === 'TRADED' ? 'TRADED IN'
-                          : `PURCHASED${player.round ? ` · ${player.round}` : ''}`}
+                      {player.source === 'EXISTING'
+                        ? 'RETAINED'
+                        : `PURCHASED${player.round ? ` · ${player.round}` : ''}`}
                     </span>
                   </td>
                   <td>{player.price > 0 ? cr(player.price) : '—'}</td>

@@ -2,21 +2,18 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { getHealth } from '../lib/api';
 import { useNarrationControls } from '../lib/narration';
 
 const LINKS = [
   { href: '/', label: 'Setup' },
-  { href: '/auction', label: 'Auction Hall', path: '/auction' },
-  { href: '/auction?tab=trades', label: 'Trade Desk', path: '/auction', tab: 'trades' },
+  { href: '/auction', label: 'Auction Hall' },
   { href: '/results', label: 'Results' },
 ];
 
 export default function TopBar() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const activeTab = searchParams.get('tab');
   const narration = useNarrationControls();
   const [health, setHealth] = useState(null);
 
@@ -39,11 +36,6 @@ export default function TopBar() {
   }, []);
 
   const serverOk = Boolean(health?.ok);
-  const isLinkActive = (link) => (
-    link.path
-      ? pathname === link.path && (activeTab || null) === (link.tab || null)
-      : pathname === link.href
-  );
 
   return (
     <header className="top-bar">
@@ -61,7 +53,7 @@ export default function TopBar() {
             <Link
               key={link.href}
               href={link.href}
-              className={`top-nav-link ${isLinkActive(link) ? 'is-active' : ''}`}
+              className={`top-nav-link ${pathname === link.href ? 'is-active' : ''}`}
             >
               {link.label}
             </Link>

@@ -74,7 +74,6 @@ export const SEASON_OPTIONS = [
       'Retain any number of your own contracts at their existing fees, within the ₹18 Cr overseas salary ceiling.',
       'No Franchise Clawback and no marquee set in a Mini Auction.',
       'Overseas salary capped at ₹18 Cr — any excess bid is diverted to the LCB welfare fund.',
-      'Mini-auction signings cannot be traded after the auction.',
     ],
   },
   {
@@ -129,8 +128,6 @@ const EVENT_STYLES = {
   CLAW_DECLINED: { icon: '⇄', tone: 'claw' },
   CLAW_MATCHED: { icon: '★', tone: 'claw' },
   CLAW_PASSED: { icon: '○', tone: 'claw' },
-  TRADE: { icon: '⇆', tone: 'trade' },
-  TRADE_EXPIRED: { icon: '⌛', tone: 'trade' },
   TAMPERING: { icon: '⚖', tone: 'injury' },
   INJURY: { icon: '⚑', tone: 'injury' },
   RPP_REPLACEMENT: { icon: '✚', tone: 'injury' },
@@ -178,141 +175,6 @@ export function categoryLabel(category) {
 
 export function strategyLabel(strategy) {
   return String(strategy || '').toLowerCase().replace(/(^|\s)\w/g, (m) => m.toUpperCase());
-}
-
-// ------------------------------------------------------------- LCB trading
-
-export const TRADE_STATUS_LABELS = {
-  PENDING_48H: 'EOI · 48h window',
-  AWAITING_CONSENT: 'Awaiting consent',
-  LCB_REVIEW: 'LCB review',
-  APPROVED: 'Approved',
-  REJECTED: 'Rejected',
-  EXPIRED: 'Expired',
-  VETOED: 'Player veto',
-};
-
-export const TRADE_TYPE_LABELS = {
-  ALL_CASH: 'All-cash',
-  PLAYER_SWAP: 'Player swap',
-  CASH_PLUS_PLAYER: 'Cash + player',
-};
-
-export const TRADE_APPROVAL_LABELS = {
-  EOI_SUBMITTED: 'EOI submitted',
-  AWAITING_PLAYER_CONSENT: 'Player consent pending',
-  LCB_REVIEW: 'LCB vetting',
-  LCB_APPROVED: 'LCB approved',
-  LCB_REJECTED: 'LCB rejected',
-  NOT_APPROVED: 'Not approved',
-};
-
-export function tradeStatusLabel(status) {
-  return TRADE_STATUS_LABELS[status] || String(status || 'PROPOSED').replace(/_/g, ' ');
-}
-
-export function tradeTypeLabel(type) {
-  return TRADE_TYPE_LABELS[type] || String(type || '').replace(/_/g, ' ');
-}
-
-export function tradeApprovalLabel(approval) {
-  return TRADE_APPROVAL_LABELS[approval] || String(approval || '').replace(/_/g, ' ');
-}
-
-/**
- * Mirrors backend activeTradeWindow(): the open window is derived from the
- * season phase, never from a client-supplied value. Every season trades its
- * previous contracts in SETUP, before retentions are finalized; the live
- * auction floor is always closed to trading.
- */
-export function activeTradeWindow(state) {
-  if (!state) return null;
-  if (state.phase === 'SETUP') return 'POST_SEASON';
-  if (state.phase === 'COMPLETED' || state.phase === 'FINAL_REVIEW') return 'POST_AUCTION';
-  return null;
-}
-
-export function tradeWindowInfo(state) {
-  const window = activeTradeWindow(state);
-  if (window === 'POST_SEASON') {
-    return {
-      open: true,
-      window,
-      label: 'Post-season window open',
-      detail: 'Trades close one week before the auction. Previous-season contracts move at their exact league fee, before retentions are set.',
-    };
-  }
-  if (window === 'POST_AUCTION') {
-    return {
-      open: true,
-      window,
-      label: 'Post-auction window open',
-      detail: 'Closes 30 days before the tournament. Mini-auction signings are frozen until they have played a season.',
-    };
-  }
-  return {
-    open: false,
-    window: null,
-    label: 'Trade window closed',
-    detail: 'The League Control Board only accepts EOIs in the post-season and post-auction windows, outside the live auction.',
-  };
-}
-
-/** Fixed league fee of a contracted player (salary is never renegotiated). */
-export function tradeSalary(state, playerId) {
-  const player = playerById(state, playerId);
-  if (!player) return 0;
-  if (Number(player.salary) > 0) return Number(player.salary);
-  if (Number(player.soldPrice) > 0) return Number(player.soldPrice);
-  return Number(player.contractFee) || 0;
-}
-
-/** UI mirror of the backend eligibility check, used to grey-out options. */
-export function tradeBlockReason(state, franchise, player, window) {
-  if (!player) return 'Unknown player';
-  const previous = state?.phase === 'SETUP'
-    && player.retentionCandidate === true
-    && player.previousFranchiseId === franchise?.id
-    && (franchise?.previousSquad || []).includes(player.id)
-    && player.availability === 'AVAILABLE'
-    && !player.retained
-    && !player.soldTo;
-  if (!previous) {
-    if (!(franchise?.squad || []).includes(player.id)) return 'Not in this squad';
-    if (player.availability !== 'SOLD') return 'Not under an active contract';
-  }
-  if (player.consentWithheld) return 'Consent withheld';
-  const banThrough = Number(player.banUntilSeason);
-  if (Number.isFinite(banThrough) && banThrough >= Number(state?.season)) return 'Serving an LCB ban';
-  if (window === 'POST_AUCTION' && player.purchasedInMini === true) return 'Mini-auction signing — frozen';
-  return null;
-}
-
-/**
- * Mirrors backend computeDeal(): classify the deal and derive the exact cash
- * movement from the fixed league fees. Positive cashAdjustment = proposer pays.
- */
-export function computeTradeDeal(state, giveIds = [], getIds = []) {
-  const round = (value) => Math.round(value * 100) / 100;
-  const valueGiven = round(giveIds.reduce((sum, id) => sum + tradeSalary(state, id), 0));
-  const valueGot = round(getIds.reduce((sum, id) => sum + tradeSalary(state, id), 0));
-  if (!giveIds.length && getIds.length) return { valueGiven, valueGot, type: 'ALL_CASH', cashAdjustment: valueGot };
-  if (giveIds.length && !getIds.length) return { valueGiven, valueGot, type: 'ALL_CASH', cashAdjustment: -valueGiven };
-  const cashAdjustment = round(valueGot - valueGiven);
-  return { valueGiven, valueGot, type: cashAdjustment === 0 ? 'PLAYER_SWAP' : 'CASH_PLUS_PLAYER', cashAdjustment };
-}
-
-/** Human-readable countdown to an ISO deadline. */
-export function deadlineLabel(iso) {
-  if (!iso) return '';
-  const remaining = Date.parse(iso) - Date.now();
-  if (!Number.isFinite(remaining)) return '';
-  if (remaining <= 0) return 'deadline lapsed';
-  const hours = Math.floor(remaining / 3600000);
-  const minutes = Math.floor((remaining % 3600000) / 60000);
-  if (hours >= 1) return `${hours}h ${minutes}m left`;
-  const seconds = Math.floor((remaining % 60000) / 1000);
-  return `${minutes}m ${seconds}s left`;
 }
 
 export function isOverseas(player) {

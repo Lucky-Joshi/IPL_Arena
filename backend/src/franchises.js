@@ -2,11 +2,10 @@
  * Ten fictional T20 Dynasty franchises.
  *
  * Both formats start with empty active squads but distinct 15-player
- * `previousSquad` rosters drawn from the 150 R0xx prior contracts. Those
- * contracts are tradeable in the pre-retention window, then the user (and the
- * nine AI teams) choose retentions during SETUP. Un-retained contracts enter
- * the shared auction pool; MINI still supplies enough P0xx additions for the
- * six-or-so buys that make a mini auction work.
+ * `previousSquad` rosters drawn from the 150 R0xx prior contracts. The user
+ * (and the nine AI teams) choose retentions during SETUP. Un-retained
+ * contracts enter the shared auction pool; MINI still supplies enough P0xx
+ * additions for the six-or-so buys that make a mini auction work.
  */
 
 import { mulberry32, statusFor } from './players.js';
@@ -355,7 +354,6 @@ export function createFranchises({ format = 'MEGA', config, players = [], rng, s
     clawUsed: 0,
     additionsLimit: fmt === 'MEGA' ? Number(conf.maxSquad) || 25 : maxAdditions,
     purchases: [],
-    trades: [],
     welfareContribution: 0,
     rejected: [],
     targets: template.targets.slice(),

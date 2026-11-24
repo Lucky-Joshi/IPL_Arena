@@ -9,7 +9,7 @@ const PHASES = new Set([
 ]);
 const REQUIRED_ARRAYS = [
   'players', 'franchises', 'proceedings', 'eventLog', 'conversations',
-  'bidHistory', 'nominations', 'trades',
+  'bidHistory', 'nominations',
 ];
 const CONFIG_NUMBERS = [
   'startingPurse', 'minSquad', 'maxSquad', 'maxOverseas', 'maxAdditions',
@@ -20,7 +20,7 @@ const OPTIONAL_CONFIG_NUMBERS = [
   'maxRetentions', 'maxCappedRetentions', 'maxUncappedRetentions',
   'totalSalaryCap', 'overseasSalaryCap', 'matchFee',
 ];
-const OPTIONAL_STATE_NUMBERS = ['welfareFund', 'matchFeeProjection', 'lcbTradeRevenue'];
+const OPTIONAL_STATE_NUMBERS = ['welfareFund', 'matchFeeProjection'];
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -36,9 +36,6 @@ export function migrateLegacyNames(state) {
   const phaseAliases = {
     RTM_OFFER: 'CLAW_OFFER', RTM_COUNTER: 'CLAW_COUNTER', RTM_MATCH: 'CLAW_MATCH',
   };
-  const approvalAliases = {
-    BCCI_REVIEW: 'LCB_REVIEW', BCCI_APPROVED: 'LCB_APPROVED', BCCI_REJECTED: 'LCB_REJECTED',
-  };
   const renameText = (value) => typeof value === 'string'
     ? value
       .replace(/BCCI/g, 'LCB')
@@ -51,12 +48,8 @@ export function migrateLegacyNames(state) {
   if (phaseAliases[state.phase]) state.phase = phaseAliases[state.phase];
   if (state.claw === undefined && state.rtm !== undefined) state.claw = state.rtm;
   if (state.clawLog === undefined && state.rtmLog !== undefined) state.clawLog = state.rtmLog;
-  if (state.lcbTradeRevenue === undefined && state.bcciTradeRevenue !== undefined) {
-    state.lcbTradeRevenue = state.bcciTradeRevenue;
-  }
   delete state.rtm;
   delete state.rtmLog;
-  delete state.bcciTradeRevenue;
 
   if (state.rules) {
     if (state.rules.clawAvailable === undefined && state.rules.rtmAvailable !== undefined) {
@@ -87,19 +80,6 @@ export function migrateLegacyNames(state) {
     }
     delete franchise.rtmCards;
     delete franchise.rtmUsed;
-  }
-
-  for (const trade of state.trades || []) {
-    if (!trade || typeof trade !== 'object') continue;
-    if (approvalAliases[trade.status]) trade.status = approvalAliases[trade.status];
-    if (approvalAliases[trade.approval]) trade.approval = approvalAliases[trade.approval];
-    if (trade.transferFee && trade.transferFee.lcbCut === undefined && trade.transferFee.bcciCut !== undefined) {
-      trade.transferFee.lcbCut = trade.transferFee.bcciCut;
-    }
-    if (trade.transferFee) delete trade.transferFee.bcciCut;
-    for (const entry of trade.timeline || []) {
-      if (approvalAliases[entry.status]) entry.status = approvalAliases[entry.status];
-    }
   }
 
   const renameEvent = (event) => {
@@ -153,20 +133,6 @@ export function validateState(state) {
   if (state.franchises.length !== 10) throw new Error(`expected 10 franchises, found ${state.franchises.length}`);
   if (!PHASES.has(state.phase)) throw new Error(`unknown phase: ${String(state.phase)}`);
 
-  // Trade ledger: every EOI needs an id, a status and both franchise references.
-  const tradeIds = new Set();
-  for (const trade of state.trades) {
-    if (!trade || typeof trade.id !== 'string' || !trade.id) throw new Error('trade missing id');
-    if (tradeIds.has(trade.id)) throw new Error(`duplicate trade id: ${trade.id}`);
-    tradeIds.add(trade.id);
-    if (typeof trade.status !== 'string' || !trade.status) throw new Error(`trade ${trade.id} missing status`);
-    if (typeof trade.fromFranchiseId !== 'string' || typeof trade.toFranchiseId !== 'string') {
-      throw new Error(`trade ${trade.id} missing franchise references`);
-    }
-    if (!Array.isArray(trade.givePlayerIds) || !Array.isArray(trade.getPlayerIds)) {
-      throw new Error(`trade ${trade.id} player lists must be arrays`);
-    }
-  }
   if (state.tamperingCases !== undefined && !Array.isArray(state.tamperingCases)) {
     throw new Error('tamperingCases is not an array');
   }
