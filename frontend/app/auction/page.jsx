@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { getState, postAction } from '../../lib/api';
 import AuctionRoom from '../../components/AuctionRoom';
 import ManagementRoom from '../../components/ManagementRoom';
@@ -9,7 +10,7 @@ import SquadManager from '../../components/SquadManager';
 import TradeDesk from '../../components/TradeDesk';
 import ProceedingsPanel from '../../components/ProceedingsPanel';
 import BreakOverlay from '../../components/BreakOverlay';
-import { BID_PHASES, cr, phaseLabel } from '../../lib/format';
+import { BID_PHASES, cr, phaseLabel, tradeWindowInfo } from '../../lib/format';
 import { useAuctioneerVoice } from '../../lib/narration';
 
 const POLL_MS = 800;
@@ -21,19 +22,25 @@ const TABS = [
   { id: 'proceedings', label: 'Proceedings' },
 ];
 
-export default function AuctionPage() {
+function AuctionPageContent() {
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get('tab');
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState('connecting');
   const [toasts, setToasts] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState('room');
+  const [tab, setTab] = useState(requestedTab === 'trades' ? 'trades' : 'room');
   const inFlight = useRef(0);
   const alive = useRef(true);
   const toastCounter = useRef(0);
   const toastTimers = useRef([]);
 
   useAuctioneerVoice(state);
+
+  useEffect(() => {
+    if (requestedTab === 'trades') setTab('trades');
+  }, [requestedTab]);
 
   const notify = useCallback((message, kind = 'error') => {
     const id = ++toastCounter.current;
@@ -152,6 +159,7 @@ export default function AuctionPage() {
 
   const isBreak = state.phase === 'STRATEGY_BREAK' || state.phase === 'SET_BREAK';
   const isCompleted = state.phase === 'COMPLETED';
+  const tradeInfo = tradeWindowInfo(state);
 
   return (
     <div className="auction-page">
@@ -185,6 +193,9 @@ export default function AuctionPage() {
             aria-pressed={tab === item.id}
           >
             {item.label}
+            {item.id === 'trades' && tradeInfo.open && (
+              <span className="tab-badge">OPEN</span>
+            )}
           </button>
         ))}
       </nav>
@@ -216,5 +227,21 @@ export default function AuctionPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+export default function AuctionPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="screen-state">
+          <div className="loader" />
+          <h1>Connecting to the Dynasty Auction Hall…</h1>
+          <p>Opening a live channel to the auction engine.</p>
+        </div>
+      }
+    >
+      <AuctionPageContent />
+    </Suspense>
   );
 }

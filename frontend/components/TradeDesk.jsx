@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   activeTradeWindow,
   computeTradeDeal,
@@ -8,6 +9,7 @@ import {
   deadlineLabel,
   franchiseById,
   playerById,
+  phaseLabel,
   roleLabel,
   tradeApprovalLabel,
   tradeBlockReason,
@@ -466,7 +468,10 @@ export default function TradeDesk({ state, onAction, busy }) {
         </div>
         {!windowInfo.open && (
           <p className="balance-note">
-            This form is shown for reference. It opens in the post-season window (before START) or after the auction completes.
+            Trading is closed during <strong>{phaseLabel(state.phase)}</strong>. This form is shown for reference only:
+            EOIs open in <strong>SETUP</strong> before START/retentions, and again in <strong>FINAL_REVIEW</strong> or{' '}
+            <strong>COMPLETED</strong> after the auction.{' '}
+            <Link className="inline-link" href="/">Create a fresh auction in SETUP →</Link>
           </p>
         )}
         <div className="trade-form">

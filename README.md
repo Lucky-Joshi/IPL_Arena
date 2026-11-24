@@ -117,7 +117,8 @@ each team and in the final review. Mega auctions have no overseas salary ceiling
 
 The **Trade Desk** tab follows the four-step LCB approval protocol. The active window is derived from the
 authoritative phase — a caller-supplied `window` is ignored. The EOI form stays visible with disabled controls outside
-an open window, so it is clear when trading opens again.
+an open window, so it is clear when trading opens again. Open it directly at `/auction?tab=trades` from the top
+navigation, the setup resume panel or the retention modal; the tab shows an **OPEN** badge whenever a window is live.
 
 - **Post-season** (`POST_SEASON`): `SETUP` in **every** season, before retentions are finalized. Each franchise
   trades its distinct previous-season contracts; un-retained players stay available for the auction. Clawback

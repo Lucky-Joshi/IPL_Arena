@@ -93,8 +93,9 @@ persistence/break scenarios and smoke invariants.
 11. Reload mid-bidding war; use Resume to confirm state restored.
 12. For a **2026 Mini**, retain contracts within the ₹18 Cr overseas ceiling; try an over-cap selection and
     confirm the rules engine rejects it with the overseas-cap message.
-13. Open the **Trade Desk** in `SETUP` before retentions (Mega or Mini) and file a BUY EOI for another
-    franchise's previous-season contract with an optional transfer fee; verify the deal summary shows the
+13. Open the **Trade Desk** in `SETUP` before retentions (Mega or Mini) — use the top-nav Trade Desk link or
+    the setup/retention link, both of which land on `/auction?tab=trades`. Confirm the **OPEN** badge, then file
+    a BUY EOI for another franchise's previous-season contract with an optional transfer fee; verify the deal summary shows the
     exact derived league fee, the 50% LCB cut and the player/seller split. Confirm a mismatched cash value is
     rejected and that the traded player appears in your retention picker after approval.
 14. Accept/reject an incoming EOI for F1, then grant consent in the inbox and confirm the approved trade

@@ -18,6 +18,7 @@ import {
   SEASON_OPTIONS,
   seasonOption,
   strategyLabel,
+  tradeWindowInfo,
 } from '../lib/format';
 
 // Only these four values are tunable. Purse, squad, salary and retention
@@ -262,6 +263,7 @@ export default function SetupScreen() {
   };
 
   const createdMine = created?.franchises?.find((entry) => entry.id === created.userFranchiseId);
+  const savedTradeOpen = Boolean(saved?.state && tradeWindowInfo(saved.state).open);
   const plan = retentionPlan(created, orderedSelection);
   const retentionMax = retentionLimit(created);
   const runningCost = plan.total;
@@ -333,6 +335,9 @@ export default function SetupScreen() {
               <a className="btn btn-primary" href="/results">View final results</a>
             ) : (
               <a className="btn btn-primary" href="/auction">Resume auction →</a>
+            )}
+            {savedTradeOpen && (
+              <a className="btn btn-ghost" href="/auction?tab=trades">Open Trade Desk →</a>
             )}
             <span className="resume-note">
               Your franchise: {saved.state.franchises?.find((f) => f.id === saved.state.userFranchiseId)?.name || '—'}
@@ -520,7 +525,7 @@ export default function SetupScreen() {
                   )}
                 </p>
                 <p className="balance-note">
-                  Want to reshape the contract list first? <a href="/auction">Open the Trade Desk →</a> deals
+                  Want to reshape the contract list first? <a href="/auction?tab=trades">Open the Trade Desk →</a> deals
                   made here appear in this picker as soon as you return.
                 </p>
 
