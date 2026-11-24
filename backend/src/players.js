@@ -274,11 +274,11 @@ function acceleratedRole(rng) {
 }
 
 /**
- * BCCI status for a generated player.
+ * LCB status for a generated player.
  *
  * Overseas players are capped. An Indian is capped when they have appeared in
  * international cricket; players who have not played international cricket for
- * five calendar years and hold no BCCI central contract are reclassified as
+ * five calendar years and hold no LCB central contract are reclassified as
  * uncapped. `contractFee` is the player's previous league salary and is what a
  * Mini Auction retention costs.
  */
@@ -322,7 +322,7 @@ export function statusFor({ rating, age, experience, nationality, rng, forceUnca
 /**
  * Build the complete auction pool.
  * @param {number|string} [seed] defaults to PLAYER_SEED
- * @param {string} [season] BCCI season key; controls base-price tiers
+ * @param {string} [season] LCB season key; controls base-price tiers
  * @returns {Array<Object>} 140 deterministic fictional players
  */
 export function generatePlayers(seed = PLAYER_SEED, season = '2025') {
@@ -371,7 +371,7 @@ export function generatePlayers(seed = PLAYER_SEED, season = '2025') {
         role,
         subtype,
         rating,
-        // BCCI registration tiers: ₹30 lakh to ₹2 crore for every season.
+        // LCB registration tiers: ₹30 lakh to ₹2 crore for every season.
         basePrice: basePriceForRating(rating),
         battingStyle,
         bowlingStyle,

@@ -1,19 +1,19 @@
 /**
- * Season operations outside the auction floor: the BCCI player-trading
- * protocol, injury replacements from the Registered Available Player Pool
- * (RAPP), the two-season ban for an uncertified pre-season withdrawal, and
+ * Season operations outside the auction floor: the LCB player-trading
+ * protocol, injury replacements from the Reserve Player Pool
+ * (RPP), the two-season ban for an uncertified pre-season withdrawal, and
  * anti-tampering enforcement.
  *
- * Trading follows the official four-step protocol:
- *   1. EOI submitted to the BCCI (PROPOSE_TRADE)         -> PENDING_48H
+ * Trading follows the league's four-step protocol:
+ *   1. EOI submitted to the LCB (PROPOSE_TRADE)         -> PENDING_48H
  *   2. Current franchise answers within 48h (RESPOND_TRADE)
  *   3. Negotiation + written player consent (PLAYER_TRADE_CONSENT / AMEND_TRADE)
- *   4. BCCI vetting of salary cap, squad limits and purse -> APPROVED / REJECTED
+ *   4. LCB vetting of salary cap, squad limits and purse -> APPROVED / REJECTED
  *
  * Deal types: ALL_CASH (one-way, exact league fee), PLAYER_SWAP (equal-salary
  * exchange) and CASH_PLUS_PLAYER (a swap whose exact salary difference is
  * settled in cash). Contract fees are never renegotiated; an optional
- * off-purse transfer fee is split 50% BCCI / up to 50% of the remainder to the
+ * off-purse transfer fee is split 50% LCB / up to 50% of the remainder to the
  * player / the rest to the selling franchise.
  */
 
@@ -102,7 +102,7 @@ function canTradePlayer(state, franchise, playerId, window) {
   if (!(franchise.squad || []).includes(playerId)) return `${player.name} is not in ${franchise.name}'s squad`;
   if (player.availability !== 'SOLD') return `${player.name} is not under an active contract`;
   if (player.consentWithheld) return `${player.name} has withheld written consent`;
-  if (isBanned(state, player)) return `${player.name} is serving a BCCI ban and cannot be traded`;
+  if (isBanned(state, player)) return `${player.name} is serving a LCB ban and cannot be traded`;
   if (window === 'POST_AUCTION' && player.purchasedInMini === true) {
     return `${player.name} was bought at the mini auction and cannot be traded until they have played a season`;
   }
@@ -193,7 +193,7 @@ function movedPlayerIds(trade) {
 }
 
 /**
- * Submit an EOI to the BCCI. The counterparty has 48 hours to answer. When the
+ * Submit an EOI to the LCB. The counterparty has 48 hours to answer. When the
  * counterparty is an AI franchise the simulator resolves the response with
  * need/budget logic unless `autoRespond:false` keeps it pending.
  */
@@ -208,7 +208,7 @@ export function proposeTrade(state, body = {}) {
     if (state.phase === 'SETUP' && isMega(state.season)) {
       return fail('No trade is permitted immediately before a Mega Auction — finalize retentions instead');
     }
-    return fail('Trades are only allowed in an official BCCI window outside the live auction');
+    return fail('Trades are only allowed in an official LCB window outside the live auction');
   }
 
   const giveIds = uniqueIds(body.givePlayerIds);
@@ -261,7 +261,7 @@ export function proposeTrade(state, body = {}) {
     consents: {},
     timeline: [],
   };
-  pushTimeline(trade, 'PENDING_48H', `EOI submitted to the BCCI by ${from.name}.`);
+  pushTimeline(trade, 'PENDING_48H', `EOI submitted to the LCB by ${from.name}.`);
   if (!Array.isArray(state.trades)) state.trades = [];
   state.trades.push(trade);
 
@@ -327,7 +327,7 @@ function autoResolveConsents(state, trade) {
   }
 }
 
-/** If every consent is in, run BCCI vetting; a single veto voids the trade. */
+/** If every consent is in, run LCB vetting; a single veto voids the trade. */
 function maybeCompleteConsent(state, trade) {
   if (trade.status !== 'AWAITING_CONSENT') return;
   const ids = movedPlayerIds(trade);
@@ -430,25 +430,25 @@ export function amendTrade(state, body = {}) {
   return { ok: true, trade, message: 'Terms amended and sent back for written consent.' };
 }
 
-/** Step 4 — BCCI vetting, then execution. Runs synchronously once consent is in. */
+/** Step 4 — LCB vetting, then execution. Runs synchronously once consent is in. */
 function vetAndExecute(state, trade) {
-  trade.status = 'BCCI_REVIEW';
-  trade.approval = 'BCCI_REVIEW';
-  pushTimeline(trade, 'BCCI_REVIEW', 'BCCI vetting salary cap, squad limits, overseas slots and anti-tampering.');
+  trade.status = 'LCB_REVIEW';
+  trade.approval = 'LCB_REVIEW';
+  pushTimeline(trade, 'LCB_REVIEW', 'LCB vetting salary cap, squad limits, overseas slots and anti-tampering.');
   const from = franchiseOf(state, trade.fromFranchiseId);
   const to = franchiseOf(state, trade.toFranchiseId);
   if (!from || !to) {
     trade.status = 'REJECTED';
-    trade.approval = 'BCCI_REJECTED';
+    trade.approval = 'LCB_REJECTED';
     trade.rejectionReason = 'Franchise missing from trade';
     return;
   }
   const capCheck = validateTradeSquads(state, trade.givePlayerIds, trade.getPlayerIds, from, to, trade.cashAdjustment, trade.window);
   if (!capCheck.ok) {
     trade.status = 'REJECTED';
-    trade.approval = 'BCCI_REJECTED';
+    trade.approval = 'LCB_REJECTED';
     trade.rejectionReason = capCheck.error;
-    pushTimeline(trade, 'REJECTED', `BCCI rejected the trade: ${capCheck.error}`);
+    pushTimeline(trade, 'REJECTED', `LCB rejected the trade: ${capCheck.error}`);
     return;
   }
 
@@ -463,17 +463,17 @@ function vetAndExecute(state, trade) {
   if (trade.transferFee && trade.transferFee.total > 0) settleTransferFee(state, trade, from, to);
 
   trade.status = 'APPROVED';
-  trade.approval = 'BCCI_APPROVED';
+  trade.approval = 'LCB_APPROVED';
   trade.executedAt = nowIso();
-  pushTimeline(trade, 'APPROVED', 'BCCI approved and announced the trade.');
+  pushTimeline(trade, 'APPROVED', 'LCB approved and announced the trade.');
 }
 
-/** Off-purse transfer-fee split: 50% BCCI, up to 50% of the rest to the player(s). */
+/** Off-purse transfer-fee split: 50% LCB, up to 50% of the rest to the player(s). */
 function settleTransferFee(state, trade, from, to) {
   const fee = trade.transferFee;
   const total = roundMoney(fee.total);
-  const bcciCut = roundMoney(total * 0.5);
-  const remainder = roundMoney(total - bcciCut);
+  const lcbCut = roundMoney(total * 0.5);
+  const remainder = roundMoney(total - lcbCut);
   const playerAmount = roundMoney(remainder * (Number(fee.playerSharePct) || 0) / 100);
   const sellerAmount = roundMoney(remainder - playerAmount);
 
@@ -484,21 +484,21 @@ function settleTransferFee(state, trade, from, to) {
   const movedIds = buyerIsFrom ? trade.getPlayerIds : trade.givePlayerIds;
   const perPlayer = movedIds.length ? roundMoney(playerAmount / movedIds.length) : 0;
 
-  fee.bcciCut = bcciCut;
+  fee.lcbCut = lcbCut;
   fee.playerAmount = playerAmount;
   fee.sellerAmount = sellerAmount;
   fee.payerId = buyer.id;
   fee.sellerId = seller.id;
   fee.players = movedIds.map((id) => ({ playerId: id, amount: perPlayer }));
 
-  state.bcciTradeRevenue = roundMoney((Number(state.bcciTradeRevenue) || 0) + bcciCut);
+  state.lcbTradeRevenue = roundMoney((Number(state.lcbTradeRevenue) || 0) + lcbCut);
   seller.transferFeeEarned = roundMoney((Number(seller.transferFeeEarned) || 0) + sellerAmount);
   for (const entry of fee.players) {
     const player = playerOf(state, entry.playerId);
     if (player) player.transferFeeEarned = roundMoney((Number(player.transferFeeEarned) || 0) + entry.amount);
   }
   pushTimeline(trade, 'TRANSFER_FEE',
-    `Off-purse transfer fee ₹${total} Cr: BCCI ₹${bcciCut} Cr, player(s) ₹${playerAmount} Cr, ${seller.name} ₹${sellerAmount} Cr.`);
+    `Off-purse transfer fee ₹${total} Cr: LCB ₹${lcbCut} Cr, player(s) ₹${playerAmount} Cr, ${seller.name} ₹${sellerAmount} Cr.`);
 }
 
 /**
@@ -560,7 +560,7 @@ export function expireTrades(state, now = Date.now()) {
 
 // ------------------------------------------------------------- anti-tampering
 
-/** Log an allegation of informal contact outside the official BCCI channel. */
+/** Log an allegation of informal contact outside the official LCB channel. */
 export function reportTampering(state, body = {}) {
   const franchise = franchiseOf(state, body.franchiseId);
   const player = playerOf(state, body.playerId);
@@ -580,7 +580,7 @@ export function reportTampering(state, body = {}) {
 }
 
 /**
- * BCCI ruling on a tampering case: fine/deduct purse from the offending
+ * LCB ruling on a tampering case: fine/deduct purse from the offending
  * franchise and/or ban the player for up to a year (one season).
  */
 export function ruleTampering(state, body = {}) {
@@ -593,7 +593,7 @@ export function ruleTampering(state, body = {}) {
   if (!upheld) {
     record.status = 'DISMISSED';
     record.ruling = { upheld: false, at: nowIso() };
-    return { ok: true, case: record, message: 'The BCCI dismissed the tampering allegation.' };
+    return { ok: true, case: record, message: 'The LCB dismissed the tampering allegation.' };
   }
   const fine = roundMoney(Math.max(0, Number(body.fine) || 0));
   const banSeasons = Math.min(1, Math.max(0, Number(body.banSeasons) || 0));
@@ -609,10 +609,10 @@ export function ruleTampering(state, body = {}) {
   const parts = [];
   if (fine > 0) parts.push(`fined ${franchise?.name || record.franchiseId} ₹${fine} Cr`);
   if (banSeasons > 0) parts.push(`banned ${player?.name || record.playerId} through ${player?.banUntilSeason}`);
-  return { ok: true, case: record, message: `BCCI upheld the tampering case${parts.length ? ': ' + parts.join(' and ') : ''}.` };
+  return { ok: true, case: record, message: `LCB upheld the tampering case${parts.length ? ': ' + parts.join(' and ') : ''}.` };
 }
 
-// ------------------------------------------------- injuries / RAPP / withdrawal
+// ------------------------------------------------- injuries / RPP / withdrawal
 
 export function injurePlayer(state, { playerId, certifiedInjury = true } = {}) {
   const player = playerOf(state, playerId);
@@ -625,7 +625,7 @@ export function injurePlayer(state, { playerId, certifiedInjury = true } = {}) {
   player.injuryReplacementBudget = salaryOf(state, playerId);
   return {
     ok: true,
-    message: `${player.name} is out with a certified injury. ${owner.name} may sign a RAPP replacement up to ${player.injuryReplacementBudget} Cr.`,
+    message: `${player.name} is out with a certified injury. ${owner.name} may sign a RPP replacement up to ${player.injuryReplacementBudget} Cr.`,
   };
 }
 
@@ -650,11 +650,11 @@ export function withdrawPlayer(state, { playerId, certifiedInjury = false } = {}
 export function signInjuryReplacement(state, { injuredPlayerId, replacementPlayerId, fee } = {}) {
   const injured = playerOf(state, injuredPlayerId);
   const replacement = playerOf(state, replacementPlayerId);
-  if (!injured || !replacement) return fail('Injured player and RAPP replacement must exist');
+  if (!injured || !replacement) return fail('Injured player and RPP replacement must exist');
   if (!injured.injured) return fail('The outgoing player has no certified injury');
   const owner = franchiseOf(state, injured.soldTo);
   if (!owner) return fail('Contracted franchise not found');
-  if (!['AVAILABLE', 'UNSOLD'].includes(replacement.availability)) return fail('Replacement is not in the RAPP');
+  if (!['AVAILABLE', 'UNSOLD'].includes(replacement.availability)) return fail('Replacement is not in the RPP');
   const amount = roundMoney(fee ?? salaryOf(state, injuredPlayerId));
   if (amount > Number(injured.injuryReplacementBudget) + 1e-9) {
     return fail(`Replacement fee cannot exceed the injured player's salary of ${injured.injuryReplacementBudget} Cr`);
@@ -664,12 +664,12 @@ export function signInjuryReplacement(state, { injuredPlayerId, replacementPlaye
   replacement.soldPrice = 0;
   replacement.salary = amount;
   replacement.soldRound = 'INJURY_REPLACEMENT';
-  replacement.isRappReplacement = true;
+  replacement.isRppReplacement = true;
   if (!owner.squad.includes(replacement.id)) owner.squad.push(replacement.id);
   injured.replacedBy = replacement.id;
   return {
     ok: true,
-    message: `${owner.name} signed ${replacement.name} from the RAPP for ${amount} Cr — no auction purse debit.`,
+    message: `${owner.name} signed ${replacement.name} from the RPP for ${amount} Cr — no auction purse debit.`,
   };
 }
 

@@ -1,7 +1,7 @@
 """Standard-library test suite for the T20 Dynasty AI service.
 
-The fixtures mirror the BCCI franchise player regulations 2025–2027: capped and
-uncapped player status, existing contract fees, Right to Match context and the
+The fixtures mirror the LCB franchise player regulations 2025–2027: capped and
+uncapped player status, existing contract fees, Franchise Clawback context and the
 ₹18 Cr overseas salary cap in Mini Auctions.
 
 Run from the workspace root:
@@ -95,7 +95,7 @@ def make_ctx(**overrides: object) -> dict:
         "season": "2025",
         "rules": {
             "totalSalaryCap": 146, "overseasSalaryCap": 0,
-            "rtmAvailable": True, "matchFee": 0.075,
+            "clawAvailable": True, "matchFee": 0.075,
         },
         "config": {
             "startingPurse": 120, "minSquad": 18, "maxSquad": 25,
@@ -105,7 +105,7 @@ def make_ctx(**overrides: object) -> dict:
         "player": player(),
         "auction": {
             "currentBid": 0, "nextBid": 2, "leaderId": None, "bidsThisLot": 0,
-            "stageKind": "SET", "accelerated": False, "rtm": None,
+            "stageKind": "SET", "accelerated": False, "claw": None,
             "availableByRole": {
                 "BATTER": 12, "BOWLER": 10, "ALLROUNDER": 8, "WICKETKEEPER": 5,
             },
@@ -113,7 +113,7 @@ def make_ctx(**overrides: object) -> dict:
         "self": {
             "id": "F1", "purse": 34.5, "squad": bowler_short_squad(),
             "additionsUsed": 2, "maxAdditions": 6, "overseasCount": 2,
-            "overseasSalarySpend": 12.0, "rtmCards": 4,
+            "overseasSalarySpend": 12.0, "clawCards": 4,
             "strategy": "BALANCED", "isLeader": False, "withdrawn": False,
             "rejected": [],
         },
@@ -297,7 +297,7 @@ class DecisionContractTests(unittest.TestCase):
                 self.assertEqual(decision["amount"], bid)
 
 
-class BcciRulesTests(unittest.TestCase):
+class LcbRulesTests(unittest.TestCase):
     def test_season_and_salary_cap_context(self):
         mega = analyze(make_ctx(season="2025", format="MEGA"))
         self.assertEqual(mega["season"], "2025")
@@ -363,17 +363,17 @@ class BcciRulesTests(unittest.TestCase):
         self.assertNotEqual(decide(ctx)["action"], "BID")
 
     def test_right_to_match_context_is_available(self):
-        rtm = {
-            "phase": "RTM_OFFER",
+        claw = {
+            "phase": "CLAW_OFFER",
             "playerId": "P001",
             "originalFranchiseId": "F7",
             "leaderFranchiseId": "F2",
             "price": 8.0,
         }
-        analysis = analyze(make_ctx(auction={"rtm": rtm}, self={"rtmCards": 4}))
-        self.assertEqual(analysis["overseas_salary"]["rtm"], rtm)
-        self.assertIsNone(analyze(make_ctx())["overseas_salary"]["rtm"])
-        result = decide(make_ctx(auction={"rtm": rtm}, self={"rtmCards": 4}))
+        analysis = analyze(make_ctx(auction={"claw": claw}, self={"clawCards": 4}))
+        self.assertEqual(analysis["overseas_salary"]["claw"], claw)
+        self.assertIsNone(analyze(make_ctx())["overseas_salary"]["claw"])
+        result = decide(make_ctx(auction={"claw": claw}, self={"clawCards": 4}))
         self.assertEqual(
             set(result),
             {"action", "amount", "confidence", "publicComment", "privateReason"},

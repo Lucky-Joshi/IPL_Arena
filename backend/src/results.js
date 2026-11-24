@@ -126,7 +126,7 @@ export function computeResults(state) {
     rankReason += purchasedCount
       ? ` ${purchasedCount} addition(s) for ₹${money(auctionSpent)} Cr.`
       : ' No auction purchases.';
-    if (tradedInCount) rankReason += ` ${tradedInCount} player(s) acquired via BCCI-approved trades.`;
+    if (tradedInCount) rankReason += ` ${tradedInCount} player(s) acquired via LCB-approved trades.`;
     if (retentionSpent > 0) rankReason += ` ₹${money(retentionSpent)} Cr committed to retentions.`;
 
     return {
@@ -155,8 +155,8 @@ export function computeResults(state) {
       overseasSalarySpend,
       overseasSalaryHeadroom: money(Math.max(0, overseasSalaryCap - overseasSalarySpend)),
       welfareContribution: money(franchise.welfareContribution || 0),
-      rtmCards: Number(franchise.rtmCards) || 0,
-      rtmUsed: Number(franchise.rtmUsed) || 0,
+      clawCards: Number(franchise.clawCards) || 0,
+      clawUsed: Number(franchise.clawUsed) || 0,
       tradeCount: (franchise.trades || []).length,
       roleCounts,
       squad,
@@ -188,7 +188,7 @@ export function computeResults(state) {
   const rules = rulesFor(seasonKey, state?.format);
   const cappedRetentions = rows.reduce((total, row) => total + row.retentionCappedCount, 0);
   const uncappedRetentions = rows.reduce((total, row) => total + row.retentionUncappedCount, 0);
-  const rtmUsed = rows.reduce((total, row) => total + row.rtmUsed, 0);
+  const clawUsed = rows.reduce((total, row) => total + row.clawUsed, 0);
   const trades = (Array.isArray(state?.trades) ? state.trades : []).map((trade) => {
     const nameOf = (id) => playerById.get(id)?.name || id;
     const feeOf = (id) => {
@@ -225,10 +225,10 @@ export function computeResults(state) {
     totalRetentionSpending: money(retentionSpending),
     cappedRetentions,
     uncappedRetentions,
-    rtmUsed,
+    clawUsed,
     trades,
     tradeWindows: tradeWindows(),
-    bcciTradeRevenue: money(state?.bcciTradeRevenue || 0),
+    lcbTradeRevenue: money(state?.lcbTradeRevenue || 0),
     tamperingCases: Array.isArray(state?.tamperingCases) ? state.tamperingCases : [],
     injuries,
     soldCount: sold.length,

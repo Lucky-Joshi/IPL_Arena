@@ -21,7 +21,7 @@ its permissive CORS headers.
 
 ### Option A — Blueprint (deploys both Render services)
 
-1. Push this repo to GitHub (already done: `Lucky-Joshi/IPL_Arena`, branch `main`).
+1. Push this repo to GitHub (already done: the project's `main` branch).
 2. Render Dashboard → **New** → **Blueprint** → connect the repo.
 3. Name the stack anything you like. Render reads `render.yaml` at the repo root and creates:
    - `t20-dynasty-ai` (free plan)

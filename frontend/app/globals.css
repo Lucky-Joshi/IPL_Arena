@@ -3599,7 +3599,7 @@ small {
   }
 }
 
-/* ---------- BCCI season rules, RTM and reporting ---------- */
+/* ---------- LCB season rules, CLAW and reporting ---------- */
 
 .rules-board {
   display: grid;
@@ -3655,7 +3655,7 @@ small {
   color: var(--gold-soft);
 }
 
-.rtm-panel {
+.claw-panel {
   margin: 0 0 14px;
   padding: 14px 16px;
   border: 1px solid var(--gold-dim);
@@ -3663,42 +3663,42 @@ small {
   background: linear-gradient(135deg, rgba(232, 200, 126, 0.12), var(--panel-2));
 }
 
-.rtm-panel.is-my-turn {
+.claw-panel.is-my-turn {
   border-color: var(--gold);
   box-shadow: 0 0 0 1px rgba(232, 200, 126, 0.18);
 }
 
-.rtm-heading {
+.claw-heading {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
 }
 
-.rtm-heading span {
+.claw-heading span {
   color: var(--gold-soft);
   font-size: 0.7rem;
   font-weight: 800;
   letter-spacing: 0.16em;
 }
 
-.rtm-heading strong {
+.claw-heading strong {
   color: var(--gold);
   font-size: 1.4rem;
 }
 
-.rtm-detail {
+.claw-detail {
   margin: 8px 0 4px;
   font-size: 0.9rem;
 }
 
-.rtm-turn {
+.claw-turn {
   margin: 0 0 12px;
   color: var(--muted);
   font-size: 0.8rem;
 }
 
-.rtm-turn.is-mine {
+.claw-turn.is-mine {
   color: var(--gold-soft);
   font-weight: 700;
 }
@@ -3710,14 +3710,14 @@ small {
   letter-spacing: 0.02em;
 }
 
-.event-rtm { border-left-color: var(--gold); }
-.event-rtm .event-icon { color: var(--gold); }
+.event-claw { border-left-color: var(--gold); }
+.event-claw .event-icon { color: var(--gold); }
 .event-trade { border-left-color: #6fb7d9; }
 .event-trade .event-icon { color: #6fb7d9; }
 .event-injury { border-left-color: var(--red); }
 .event-injury .event-icon { color: var(--red); }
 
-/* ---------- BCCI trade desk ---------- */
+/* ---------- LCB trade desk ---------- */
 
 .trade-desk {
   display: flex;
@@ -4199,7 +4199,7 @@ small {
     display: none;
   }
 
-  .rtm-heading strong {
+  .claw-heading strong {
     font-size: 1.15rem;
   }
 }

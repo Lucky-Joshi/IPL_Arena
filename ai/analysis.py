@@ -93,7 +93,7 @@ def normalize_format(value: object) -> str:
 
 
 def normalize_season(value: object, fmt: str) -> str:
-    """Resolve a BCCI season key, falling back to the auction format."""
+    """Resolve a LCB season key, falling back to the auction format."""
     text = str(value or "").strip()
     if text in ("2025", "2026", "2027"):
         return text
@@ -101,7 +101,7 @@ def normalize_season(value: object, fmt: str) -> str:
 
 
 def capped_status(player: dict) -> dict:
-    """BCCI capped/uncapped status, with safe defaults for older test fixtures."""
+    """LCB capped/uncapped status, with safe defaults for older test fixtures."""
     capped_value = player.get("capped")
     capped = True if capped_value is None else bool(capped_value)
     return {
@@ -358,7 +358,7 @@ def analyze(ctx: dict) -> dict:
     competition = competition_pressure(auction, self_info, context.get("others"), max(0.0, next_bid))
     engaged = engagement(auction, self_info)
 
-    # In Mini Auctions an overseas salary above ₹18 Cr is diverted to the BCCI
+    # In Mini Auctions an overseas salary above ₹18 Cr is diverted to the LCB
     # welfare fund, so it does not increase the player's value to the squad.
     cap_value = rules.get("overseasSalaryCap", config.get("overseasSalaryCap"))
     overseas_cap = max(0.0, num(cap_value))
@@ -377,7 +377,7 @@ def analyze(ctx: dict) -> dict:
             "spend": round(salary_spend, 4),
             "effective_ceiling": salary_ceiling,
             "salary_blocked": salary_blocked,
-            "rtm": as_dict(auction.get("rtm")) or None,
+            "claw": as_dict(auction.get("claw")) or None,
         },
         "player": player,
         "player_id": str(player.get("id") or ""),

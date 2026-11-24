@@ -350,8 +350,8 @@ export function createFranchises({ format = 'MEGA', config, players = [], rng, s
     previousSquad: [],
     retentions: [],
     retentionSpent: 0,
-    rtmCards: SEASONS[seasonKey].rtmAvailable ? SEASONS[seasonKey].maxRetentions : 0,
-    rtmUsed: 0,
+    clawCards: SEASONS[seasonKey].clawAvailable ? SEASONS[seasonKey].maxRetentions : 0,
+    clawUsed: 0,
     additionsLimit: fmt === 'MEGA' ? Number(conf.maxSquad) || 25 : maxAdditions,
     purchases: [],
     trades: [],
@@ -363,7 +363,7 @@ export function createFranchises({ format = 'MEGA', config, players = [], rng, s
   }));
 
   // Both Mega and Mini seasons need previous-season contracts: Mega for
-  // capped/uncapped retentions and RTM cards, Mini for contract-fee retentions.
+  // capped/uncapped retentions and CLAW cards, Mini for contract-fee retentions.
   const { retainedPlayers, squads } = createPreviousSquads({ franchises, season: seasonKey, rng: random });
   const knownIds = new Set(players.map((player) => player.id));
   for (const player of retainedPlayers) {

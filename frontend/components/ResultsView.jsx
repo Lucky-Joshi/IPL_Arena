@@ -67,8 +67,8 @@ export default function ResultsView({ results }) {
         <SummaryCard label="UNSOLD" value={results.unsoldCount ?? 0} detail="Left in the pool" />
         <SummaryCard label="FRANCHISES" value={franchises.length} detail="Fully audited squads" />
         <SummaryCard label="WELFARE FUND" value={cr(results.welfareFund)} detail="Overseas bids above the ₹18 Cr salary cap" />
-        <SummaryCard label="MATCH FEES" value={cr(results.matchFeeProjection)} detail="Playing XI + Impact Player, league stage" />
-        <SummaryCard label="RTM USED" value={results.rtmUsed ?? 0} detail="Right to Match cards exercised" />
+        <SummaryCard label="MATCH FEES" value={cr(results.matchFeeProjection)} detail="Playing XI + X-Factor Substitute, league stage" />
+        <SummaryCard label="CLAWBACK USED" value={results.clawUsed ?? 0} detail="Franchise Clawback cards exercised" />
         <SummaryCard label="RETENTIONS" value={`${results.cappedRetentions ?? 0} / ${results.uncappedRetentions ?? 0}`} detail="Capped / uncapped" />
       </section>
 
@@ -79,7 +79,7 @@ export default function ResultsView({ results }) {
             <thead>
               <tr>
                 <th>Rank</th><th>Franchise</th><th>Spent</th><th>Remaining</th>
-                <th>Squad</th><th>Overseas</th><th>Cap left</th><th>Welfare</th><th>RTM</th>
+                <th>Squad</th><th>Overseas</th><th>Cap left</th><th>Welfare</th><th>Clawback</th>
                 <th>Score</th><th>Assessment</th>
               </tr>
             </thead>
@@ -94,7 +94,7 @@ export default function ResultsView({ results }) {
                   <td>{entry.overseasCount} <small>/ 8</small></td>
                   <td>{cr(entry.salaryHeadroom)} <small>of {cr(entry.salaryCap)}</small></td>
                   <td>{cr(entry.welfareContribution)}</td>
-                  <td>{entry.rtmCards ?? 0} left · {entry.rtmUsed ?? 0} used</td>
+                  <td>{entry.clawCards ?? 0} left · {entry.clawUsed ?? 0} used</td>
                   <td><strong>{entry.balanceScore ?? '—'}</strong></td>
                   <td><span className="rank-reason">{entry.rankReason || '—'}</span></td>
                 </tr>
@@ -152,7 +152,7 @@ export default function ResultsView({ results }) {
                   <span>Cap left {cr(entry.salaryHeadroom)} / {cr(entry.salaryCap)}</span>
                   <span>Overseas salary {cr(entry.overseasSalarySpend)} / {entry.overseasSalaryCap ? cr(entry.overseasSalaryCap) : 'no cap'}</span>
                   <span>Retained {entry.retentionCappedCount} capped · {entry.retentionUncappedCount} uncapped</span>
-                  <span>RTM {entry.rtmCards} left · {entry.rtmUsed} used</span>
+                  <span>Clawback {entry.clawCards} left · {entry.clawUsed} used</span>
                   <span>Welfare fund {cr(entry.welfareContribution)}</span>
                   <span>Overseas {entry.overseasCount}</span>
                   <span>Score {entry.balanceScore}</span>
@@ -242,8 +242,8 @@ export default function ResultsView({ results }) {
             ))}
             {!results.trades?.length && <li className="report-empty">No trades were registered.</li>}
           </ul>
-          {Number(results.bcciTradeRevenue) > 0 && (
-            <p className="balance-note">BCCI transfer-fee revenue: <strong>{cr(results.bcciTradeRevenue)}</strong></p>
+          {Number(results.lcbTradeRevenue) > 0 && (
+            <p className="balance-note">League Control Board transfer-fee revenue: <strong>{cr(results.lcbTradeRevenue)}</strong></p>
           )}
           {(results.tamperingCases || []).length > 0 && (
             <ul className="report-list">
@@ -260,7 +260,7 @@ export default function ResultsView({ results }) {
         </section>
 
         <section className="panel">
-          <div className="panel-heading"><h3>Injuries &amp; withdrawals</h3><span className="panel-tag">RAPP / BAN</span></div>
+          <div className="panel-heading"><h3>Injuries &amp; withdrawals</h3><span className="panel-tag">RPP / BAN</span></div>
           <ul className="report-list">
             {(results.injuries || []).map((player) => (
               <li key={player.playerId}>
@@ -284,8 +284,8 @@ export default function ResultsView({ results }) {
           {ranked[0] && <> <strong>{ranked[0].name}</strong> tops the rankings — {ranked[0].rankReason || 'the best-balanced squad in the room'}.</>}
           {topSpender && <> The biggest spender was <strong>{topSpender.name}</strong> at {cr(topSpender.purseSpent)}.</>}
           {bestBalance && <> The highest balance score went to <strong>{bestBalance.name}</strong> ({bestBalance.balanceScore}).</>}
-          {' '}Right to Match was exercised <strong>{results.rtmUsed ?? 0}</strong> time{results.rtmUsed === 1 ? '' : 's'}, and{' '}
-          <strong>{cr(results.welfareFund)}</strong> reached the BCCI player welfare fund from overseas bids above the salary cap.
+          {' '}Franchise Clawback was exercised <strong>{results.clawUsed ?? 0}</strong> time{results.clawUsed === 1 ? '' : 's'}, and{' '}
+          <strong>{cr(results.welfareFund)}</strong> reached the League Control Board player welfare fund from overseas bids above the salary cap.
         </p>
       </section>
 

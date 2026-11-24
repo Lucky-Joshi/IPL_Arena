@@ -215,11 +215,16 @@ async function dispatchAction(body) {
   const active = ensureEngine();
   if (!active) return { ok: false, error: 'No auction in progress', state: null };
   const state = active.getState();
-  const action = String(body.action || '');
+  const legacyActions = {
+    USE_RTM: 'USE_CLAW', PASS_RTM: 'PASS_CLAW', RTM_RAISE: 'CLAW_RAISE',
+    RTM_DECLINE: 'CLAW_DECLINE', MATCH_RTM: 'MATCH_CLAW',
+  };
+  const requestedAction = String(body.action || '');
+  const action = legacyActions[requestedAction] || requestedAction;
 
   const HUMAN_ACTIONS = new Set([
     'BID', 'WITHDRAW', 'SET_RETENTIONS',
-    'USE_RTM', 'PASS_RTM', 'RTM_RAISE', 'RTM_DECLINE', 'MATCH_RTM',
+    'USE_CLAW', 'PASS_CLAW', 'CLAW_RAISE', 'CLAW_DECLINE', 'MATCH_CLAW',
     'PROPOSE_TRADE', 'RESPOND_TRADE', 'PLAYER_TRADE_CONSENT', 'AMEND_TRADE',
     'RUN_AI_TRADES', 'INJURE_PLAYER',
     'SIGN_INJURY_REPLACEMENT', 'PLAYER_WITHDRAW',
@@ -235,7 +240,7 @@ async function dispatchAction(body) {
     delete body.auto;
     if (action === 'PROPOSE_TRADE') body.fromFranchiseId = requested;
   }
-  // REPORT_TAMPERING / RULE_TAMPERING are BCCI integrity operations, not
+  // REPORT_TAMPERING / RULE_TAMPERING are LCB integrity operations, not
   // franchise decisions, so they carry no franchise-ownership gate.
 
   // The HTTP contract uses `action`; the engine's dispatcher uses `type`.

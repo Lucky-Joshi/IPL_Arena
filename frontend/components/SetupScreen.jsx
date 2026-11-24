@@ -21,7 +21,7 @@ import {
 } from '../lib/format';
 
 // Only these four values are tunable. Purse, squad, salary and retention
-// limits come from the authoritative BCCI season registry on the backend.
+// limits come from the authoritative LCB season registry on the backend.
 const DEFAULT_CONFIG = {
   minReservePerSlot: 0.2,
   maxAdditions: 6,
@@ -133,7 +133,7 @@ export default function SetupScreen() {
 
   const validate = () => {
     const values = config;
-    if (!SEASON_OPTIONS.some((option) => option.key === season)) return 'Choose a BCCI season.';
+    if (!SEASON_OPTIONS.some((option) => option.key === season)) return 'Choose a League Control Board season.';
     if (format === 'MINI') {
       if (Number(values.maxAdditions) < 1 || Number(values.maxAdditions) > seasonDetails.maxRetentions) {
         return 'Mini additions must be between 1 and the maximum squad size.';
@@ -335,7 +335,7 @@ export default function SetupScreen() {
         <div className="section-heading">
           <span className="step-number">01</span>
           <div>
-            <h2>Choose the BCCI season</h2>
+            <h2>Choose a League Control Board season</h2>
             <p>One Mega followed by two Mini Auctions. Financial and squad limits are fixed by the regulations.</p>
           </div>
         </div>
@@ -441,7 +441,7 @@ export default function SetupScreen() {
           <span className="step-number">05</span>
           <div>
             <h2>Authorised rules &amp; pace controls</h2>
-            <p>Financial limits are set by the BCCI season registry and enforced for human and AI bidders alike.</p>
+            <p>Financial limits are set by the fictional League Control Board season registry and enforced for human and AI bidders alike.</p>
           </div>
         </div>
         <div className="rules-board">
@@ -450,9 +450,9 @@ export default function SetupScreen() {
           <div><span>TOTAL SALARY CAP</span><strong>{cr(seasonDetails.totalSalaryCap)}</strong></div>
           <div><span>OVERSEAS SALARY CAP</span><strong>{seasonDetails.overseasSalaryCap ? cr(seasonDetails.overseasSalaryCap) : 'No ceiling (Mega)'}</strong></div>
           <div><span>SQUAD</span><strong>18–25 · max 8 overseas</strong></div>
-          <div><span>RETENTIONS / RTM</span><strong>{format === 'MEGA' ? '6 max · 6 − retentions RTM cards' : 'At contract fee · no RTM'}</strong></div>
+          <div><span>RETENTIONS / CLAWBACK</span><strong>{format === 'MEGA' ? '6 max · 6 − retentions Clawback cards' : 'At contract fee · no Clawback'}</strong></div>
           <div><span>MARQUEE SETS</span><strong>{format === 'MEGA' ? 2 : 0}</strong></div>
-          <div><span>MATCH FEE</span><strong>₹7.5 lakh per Playing XI member incl. Impact Player</strong></div>
+          <div><span>MATCH FEE</span><strong>₹7.5 lakh per Playing XI member incl. X-Factor Substitute</strong></div>
         </div>
         <div className="config-grid">
           <NumberField label="Mini additions" value={config.maxAdditions} min={1} max={25} step={1}
@@ -503,10 +503,10 @@ export default function SetupScreen() {
                     <>
                       Up to <strong>{retentionMax}</strong> in total — at most <strong>{maxCapped}</strong> capped
                       (₹18/14/11/18/14 Cr in selection order) and <strong>{maxUncapped}</strong> uncapped (₹4 Cr each).
-                      Every unused slot leaves a Right to Match card.
+                      Every unused slot leaves a Franchise Clawback card.
                     </>
                   ) : (
-                    <>Keep as many as you like at their existing contract fees. There is no Right to Match in a Mini Auction.</>
+                    <>Keep as many as you like at their existing contract fees. There is no Franchise Clawback in a Mini Auction.</>
                   )}
                 </p>
 
@@ -516,7 +516,7 @@ export default function SetupScreen() {
                     <div><span>CAPPED / UNCAPPED</span><strong>{plan.cappedCount}/{maxCapped} · {plan.uncappedCount}/{maxUncapped}</strong></div>
                   )}
                   <div><span>RETENTION COST</span><strong>{cr(runningCost)}</strong></div>
-                  <div><span>RTM CARDS</span><strong>{plan.rtmCards}</strong></div>
+                  <div><span>CLAWBACK CARDS</span><strong>{plan.clawCards}</strong></div>
                   <div><span>PURSE AFTER</span><strong>{cr(projectedPurse)}</strong></div>
                 </div>
 
@@ -581,7 +581,7 @@ export default function SetupScreen() {
                   <strong>{cr(Number(createdMine?.retentionSpent || 0))}</strong>. The nine rivals have
                   locked their own picks from what remained. Remaining purse:{' '}
                   <strong>{cr(createdMine?.purse)}</strong>.{' '}
-                  {isMegaAuction && <>You hold <strong>{Number(createdMine?.rtmCards) || 0}</strong> Right to Match card{Number(createdMine?.rtmCards) === 1 ? '' : 's'}.</>}
+                  {isMegaAuction && <>You hold <strong>{Number(createdMine?.clawCards) || 0}</strong> Franchise Clawback card{Number(createdMine?.clawCards) === 1 ? '' : 's'}.</>}
                 </p>
 
                 <h3 className="modal-subhead">Your retained squad</h3>

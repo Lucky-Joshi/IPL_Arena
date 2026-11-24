@@ -21,9 +21,9 @@ export const PHASE_LABELS = {
   BIDDING: 'Bidding Live',
   GOING_ONCE: 'Going Once',
   GOING_TWICE: 'Going Twice',
-  RTM_OFFER: 'Right to Match · Offer',
-  RTM_COUNTER: 'Right to Match · Counter',
-  RTM_MATCH: 'Right to Match · Final Call',
+  CLAW_OFFER: 'Franchise Clawback · Offer',
+  CLAW_COUNTER: 'Franchise Clawback · Counter',
+  CLAW_MATCH: 'Franchise Clawback · Final Call',
   SOLD: 'Sold',
   UNSOLD: 'Unsold',
   SET_BREAK: 'Set Break',
@@ -33,11 +33,11 @@ export const PHASE_LABELS = {
   COMPLETED: 'Completed',
 };
 
-/** The live three-step Right to Match lot phase used in the 2025 Mega Auction. */
-export const RTM_PHASES = ['RTM_OFFER', 'RTM_COUNTER', 'RTM_MATCH'];
+/** The live three-step Franchise Clawback lot phase used in the 2025 Mega Auction. */
+export const CLAW_PHASES = ['CLAW_OFFER', 'CLAW_COUNTER', 'CLAW_MATCH'];
 
 /**
- * BCCI franchise player regulations 2025–2027. Mirrors backend/src/rules.js so the
+ * Fictional League Control Board (LCB) player regulations 2025–2027. Mirrors backend/src/rules.js so the
  * setup screen can show the authoritative financial limits before CREATE.
  */
 export const SEASON_OPTIONS = [
@@ -49,14 +49,14 @@ export const SEASON_OPTIONS = [
     totalSalaryCap: 146,
     overseasSalaryCap: 0,
     maxRetentions: 6,
-    rtm: true,
+    claw: true,
     kicker: 'The full rebuild',
     rules: [
       '₹120 Cr purse within a ₹146 Cr total salary cap.',
       'Retain up to 6: at most 5 capped (₹18/14/11/18/14 Cr slabs) and 2 uncapped (₹4 Cr each).',
-      'Every unused retention becomes a Right to Match card — 6 minus direct retentions.',
+      'Every unused retention becomes a Franchise Clawback card — 6 minus direct retentions.',
       'Two marquee sets, role-based sets, accelerated round and a final set.',
-      'Squads of 18–25, maximum 8 overseas, 4 overseas in the Playing XI including the Impact Player.',
+      'Squads of 18–25, maximum 8 overseas, 4 overseas in the Playing XI including the X-Factor Substitute.',
     ],
   },
   {
@@ -67,13 +67,13 @@ export const SEASON_OPTIONS = [
     totalSalaryCap: 151,
     overseasSalaryCap: 18,
     maxRetentions: 25,
-    rtm: false,
+    claw: false,
     kicker: 'Retain and refine',
     rules: [
       '₹125 Cr purse within a ₹151 Cr total salary cap.',
       'Retain any number of your own contracts at their existing fees, within the ₹18 Cr overseas salary ceiling.',
-      'No Right to Match and no marquee set in a Mini Auction.',
-      'Overseas salary capped at ₹18 Cr — any excess bid is diverted to the BCCI welfare fund.',
+      'No Franchise Clawback and no marquee set in a Mini Auction.',
+      'Overseas salary capped at ₹18 Cr — any excess bid is diverted to the LCB welfare fund.',
       'Mini-auction signings cannot be traded after the auction.',
     ],
   },
@@ -85,14 +85,14 @@ export const SEASON_OPTIONS = [
     totalSalaryCap: 157,
     overseasSalaryCap: 18,
     maxRetentions: 25,
-    rtm: false,
+    claw: false,
     kicker: 'The final mini',
     rules: [
       '₹130 Cr purse within a ₹157 Cr total salary cap.',
       'Retain any number of your own contracts at their existing fees, within the ₹18 Cr overseas salary ceiling.',
-      'No Right to Match and no marquee set in a Mini Auction.',
-      'Overseas salary capped at ₹18 Cr — any excess bid is diverted to the BCCI welfare fund.',
-      'Squads of 18–25, maximum 8 overseas, 4 overseas in the Playing XI including the Impact Player.',
+      'No Franchise Clawback and no marquee set in a Mini Auction.',
+      'Overseas salary capped at ₹18 Cr — any excess bid is diverted to the LCB welfare fund.',
+      'Squads of 18–25, maximum 8 overseas, 4 overseas in the Playing XI including the X-Factor Substitute.',
     ],
   },
 ];
@@ -123,17 +123,17 @@ const EVENT_STYLES = {
   SOLD: { icon: '✦', tone: 'sold' },
   UNSOLD: { icon: '×', tone: 'unsold' },
   WITHDRAW: { icon: '↩', tone: 'withdraw' },
-  RTM_OFFER: { icon: '★', tone: 'rtm' },
-  RTM_USED: { icon: '★', tone: 'rtm' },
-  RTM_COUNTERED: { icon: '⇄', tone: 'rtm' },
-  RTM_DECLINED: { icon: '⇄', tone: 'rtm' },
-  RTM_MATCHED: { icon: '★', tone: 'rtm' },
-  RTM_PASSED: { icon: '○', tone: 'rtm' },
+  CLAW_OFFER: { icon: '★', tone: 'claw' },
+  CLAW_USED: { icon: '★', tone: 'claw' },
+  CLAW_COUNTERED: { icon: '⇄', tone: 'claw' },
+  CLAW_DECLINED: { icon: '⇄', tone: 'claw' },
+  CLAW_MATCHED: { icon: '★', tone: 'claw' },
+  CLAW_PASSED: { icon: '○', tone: 'claw' },
   TRADE: { icon: '⇆', tone: 'trade' },
   TRADE_EXPIRED: { icon: '⌛', tone: 'trade' },
   TAMPERING: { icon: '⚖', tone: 'injury' },
   INJURY: { icon: '⚑', tone: 'injury' },
-  RAPP_REPLACEMENT: { icon: '✚', tone: 'injury' },
+  RPP_REPLACEMENT: { icon: '✚', tone: 'injury' },
   WITHDRAWAL: { icon: '⊘', tone: 'injury' },
   BREAK: { icon: 'II', tone: 'break' },
   MEETING: { icon: '◎', tone: 'meeting' },
@@ -180,12 +180,12 @@ export function strategyLabel(strategy) {
   return String(strategy || '').toLowerCase().replace(/(^|\s)\w/g, (m) => m.toUpperCase());
 }
 
-// ------------------------------------------------------------- BCCI trading
+// ------------------------------------------------------------- LCB trading
 
 export const TRADE_STATUS_LABELS = {
   PENDING_48H: 'EOI · 48h window',
   AWAITING_CONSENT: 'Awaiting consent',
-  BCCI_REVIEW: 'BCCI review',
+  LCB_REVIEW: 'LCB review',
   APPROVED: 'Approved',
   REJECTED: 'Rejected',
   EXPIRED: 'Expired',
@@ -201,9 +201,9 @@ export const TRADE_TYPE_LABELS = {
 export const TRADE_APPROVAL_LABELS = {
   EOI_SUBMITTED: 'EOI submitted',
   AWAITING_PLAYER_CONSENT: 'Player consent pending',
-  BCCI_REVIEW: 'BCCI vetting',
-  BCCI_APPROVED: 'BCCI approved',
-  BCCI_REJECTED: 'BCCI rejected',
+  LCB_REVIEW: 'LCB vetting',
+  LCB_APPROVED: 'LCB approved',
+  LCB_REJECTED: 'LCB rejected',
   NOT_APPROVED: 'Not approved',
 };
 
@@ -261,7 +261,7 @@ export function tradeWindowInfo(state) {
     open: false,
     window: null,
     label: 'Trade window closed',
-    detail: 'The BCCI only accepts EOIs in the post-season and post-auction windows, outside the live auction.',
+    detail: 'The League Control Board only accepts EOIs in the post-season and post-auction windows, outside the live auction.',
   };
 }
 
@@ -281,7 +281,7 @@ export function tradeBlockReason(state, franchise, player, window) {
   if (player.availability !== 'SOLD') return 'Not under an active contract';
   if (player.consentWithheld) return 'Consent withheld';
   const banThrough = Number(player.banUntilSeason);
-  if (Number.isFinite(banThrough) && banThrough >= Number(state?.season)) return 'Serving a BCCI ban';
+  if (Number.isFinite(banThrough) && banThrough >= Number(state?.season)) return 'Serving an LCB ban';
   if (window === 'POST_AUCTION' && player.purchasedInMini === true) return 'Mini-auction signing — frozen';
   return null;
 }
@@ -429,12 +429,12 @@ export function phaseStatus(state) {
       return 'Going once — any further bids?';
     case 'GOING_TWICE':
       return 'Going twice — final call';
-    case 'RTM_OFFER':
-      return 'Right to Match — the previous franchise may match the bid';
-    case 'RTM_COUNTER':
-      return 'The leading franchise may counter the Right to Match';
-    case 'RTM_MATCH':
-      return 'Final Right to Match call — match or let the player go';
+    case 'CLAW_OFFER':
+      return 'Franchise Clawback — the previous franchise may match the bid';
+    case 'CLAW_COUNTER':
+      return 'The leading franchise may counter the Franchise Clawback';
+    case 'CLAW_MATCH':
+      return 'Final Franchise Clawback call — match or let the player go';
     case 'SOLD':
       return 'Hammer down. The player has a new home';
     case 'UNSOLD':
@@ -460,7 +460,7 @@ export function squadLimit(state, franchise) {
   return Number(state?.config?.maxSquad) || 25;
 }
 
-/** BCCI capped/uncapped status. Missing data defaults to capped. */
+/** Fictional capped/uncapped status. Missing data defaults to capped. */
 export function isUncapped(player) {
   return player?.capped === false;
 }
@@ -537,7 +537,7 @@ export function retentionPlan(state, playerIds = []) {
     total: round2(total),
     cappedCount,
     uncappedCount,
-    rtmCards: mega ? Math.max(0, (Number(rules.maxRetentions) || 6) - entries.length) : 0,
+    clawCards: mega ? Math.max(0, (Number(rules.maxRetentions) || 6) - entries.length) : 0,
     overLimit: entries.length > max,
     overCapped: mega && cappedCount > maxCapped,
     overUncapped: mega && uncappedCount > maxUncapped,
@@ -545,29 +545,29 @@ export function retentionPlan(state, playerIds = []) {
   };
 }
 
-/** Who must decide in the current Right to Match step, if anyone. */
-export function rtmActor(state) {
-  if (!state?.rtm || !RTM_PHASES.includes(state.phase)) return null;
-  return state.phase === 'RTM_COUNTER' ? state.rtm.leaderFranchiseId : state.rtm.originalFranchiseId;
+/** Who must decide in the current Franchise Clawback step, if anyone. */
+export function clawActor(state) {
+  if (!state?.claw || !CLAW_PHASES.includes(state.phase)) return null;
+  return state.phase === 'CLAW_COUNTER' ? state.claw.leaderFranchiseId : state.claw.originalFranchiseId;
 }
 
-/** Human-facing actions for the current Right to Match step. */
-export function rtmOptions(state) {
+/** Human-facing actions for the current Franchise Clawback step. */
+export function clawOptions(state) {
   switch (state?.phase) {
-    case 'RTM_OFFER':
+    case 'CLAW_OFFER':
       return [
-        { type: 'USE_RTM', label: 'Use Right to Match', primary: true },
-        { type: 'PASS_RTM', label: 'Pass' },
+        { type: 'USE_CLAW', label: 'Use Franchise Clawback', primary: true },
+        { type: 'PASS_CLAW', label: 'Pass' },
       ];
-    case 'RTM_COUNTER':
+    case 'CLAW_COUNTER':
       return [
-        { type: 'RTM_RAISE', label: 'Counter the bid', primary: true },
-        { type: 'RTM_DECLINE', label: 'Stand pat' },
+        { type: 'CLAW_RAISE', label: 'Counter the bid', primary: true },
+        { type: 'CLAW_DECLINE', label: 'Stand pat' },
       ];
-    case 'RTM_MATCH':
+    case 'CLAW_MATCH':
       return [
-        { type: 'MATCH_RTM', label: 'Match the price', primary: true },
-        { type: 'PASS_RTM', label: 'Let them have him' },
+        { type: 'MATCH_CLAW', label: 'Match the price', primary: true },
+        { type: 'PASS_CLAW', label: 'Let them have him' },
       ];
     default:
       return [];

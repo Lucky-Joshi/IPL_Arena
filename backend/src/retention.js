@@ -1,12 +1,12 @@
 /**
- * BCCI 2025–27 retention rules.
+ * LCB 2025–27 retention rules.
  *
  * MEGA: at most six players, of whom at most five are capped and at most two
  * are uncapped. Capped retentions cost ₹18/14/11/18/14 Cr in selection order;
- * uncapped retentions cost ₹4 Cr each. Every retention not used leaves an RTM
+ * uncapped retentions cost ₹4 Cr each. Every retention not used leaves an CLAW
  * card behind (up to 6 − direct retentions).
  *
- * MINI: no retention cap and no RTM. A retained player keeps their existing
+ * MINI: no retention cap and no CLAW. A retained player keeps their existing
  * contract fee; releasing them returns that salary to the purse.
  */
 
@@ -142,7 +142,7 @@ export function buildRetentionPlan(state, franchiseId, playerIds) {
     total: Math.round(total * 100) / 100,
     cappedCount,
     uncappedCount,
-    rtmCards: mega ? rules.maxRetentions - entries.length : 0,
+    clawCards: mega ? rules.maxRetentions - entries.length : 0,
   };
 }
 
@@ -199,7 +199,7 @@ export function applyRetentionSelection(state, franchiseId, playerIds) {
 
   franchise.retentionSpent = Math.round((numberOr(franchise.retentionSpent, 0) + plan.total) * 100) / 100;
   franchise.purse = Math.round((numberOr(franchise.purse, 0) - plan.total) * 100) / 100;
-  franchise.rtmCards = plan.rtmCards;
+  franchise.clawCards = plan.clawCards;
 
   if (rules.format === 'MINI') {
     const retainedCount = (franchise.squad || []).length;
@@ -251,8 +251,8 @@ export function resetRetentions(state) {
     franchise.retentions = [];
     franchise.retentionSpent = 0;
     franchise.purse = startingPurse;
-    franchise.rtmCards = rules.rtmAvailable ? rules.maxRetentions : 0;
-    franchise.rtmUsed = 0;
+    franchise.clawCards = rules.clawAvailable ? rules.maxRetentions : 0;
+    franchise.clawUsed = 0;
     franchise.overseasSalarySpend = 0;
     franchise.additionsLimit = rules.format === 'MINI'
       ? numberOr(state.config?.maxAdditions, 6)
@@ -302,7 +302,7 @@ export function autoRetainAi(state) {
         return true;
       }));
     }
-    // Apply the whole selection at once: capped slabs and the RTM card count
+    // Apply the whole selection at once: capped slabs and the CLAW card count
     // both depend on the complete ordered list, not on each player in isolation.
     plan = plan.slice(0, rules.maxRetentions);
     const check = buildRetentionPlan(state, franchise.id, plan);

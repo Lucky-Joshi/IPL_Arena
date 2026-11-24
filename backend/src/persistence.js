@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const PHASES = new Set([
   'SETUP', 'OPENING', 'PLAYER_INTRODUCTION', 'BIDDING', 'GOING_ONCE', 'GOING_TWICE',
-  'RTM_OFFER', 'RTM_COUNTER', 'RTM_MATCH',
+  'CLAW_OFFER', 'CLAW_COUNTER', 'CLAW_MATCH',
   'SOLD', 'UNSOLD', 'SET_BREAK', 'STRATEGY_BREAK', 'ACCELERATED_AUCTION',
   'FINAL_REVIEW', 'COMPLETED',
 ]);
@@ -15,15 +15,96 @@ const CONFIG_NUMBERS = [
   'startingPurse', 'minSquad', 'maxSquad', 'maxOverseas', 'maxAdditions',
   'minReservePerSlot', 'tickMs',
 ];
-// Older saves predate retentions and the BCCI season rules; normalise them.
+// Older saves predate retentions and the LCB season rules; normalise them.
 const OPTIONAL_CONFIG_NUMBERS = [
   'maxRetentions', 'maxCappedRetentions', 'maxUncappedRetentions',
   'totalSalaryCap', 'overseasSalaryCap', 'matchFee',
 ];
-const OPTIONAL_STATE_NUMBERS = ['welfareFund', 'matchFeeProjection', 'bcciTradeRevenue'];
+const OPTIONAL_STATE_NUMBERS = ['welfareFund', 'matchFeeProjection', 'lcbTradeRevenue'];
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+/**
+ * Rename identifiers from auctions saved before the fiction-first rebrand.
+ * This keeps old saves playable while retiring the old vocabulary from disk
+ * the next time the engine writes state.
+ */
+export function migrateLegacyNames(state) {
+  if (!state || typeof state !== 'object') return state;
+  const phaseAliases = {
+    RTM_OFFER: 'CLAW_OFFER', RTM_COUNTER: 'CLAW_COUNTER', RTM_MATCH: 'CLAW_MATCH',
+  };
+  const approvalAliases = {
+    BCCI_REVIEW: 'LCB_REVIEW', BCCI_APPROVED: 'LCB_APPROVED', BCCI_REJECTED: 'LCB_REJECTED',
+  };
+
+  if (phaseAliases[state.phase]) state.phase = phaseAliases[state.phase];
+  if (state.claw === undefined && state.rtm !== undefined) state.claw = state.rtm;
+  if (state.clawLog === undefined && state.rtmLog !== undefined) state.clawLog = state.rtmLog;
+  if (state.lcbTradeRevenue === undefined && state.bcciTradeRevenue !== undefined) {
+    state.lcbTradeRevenue = state.bcciTradeRevenue;
+  }
+  delete state.rtm;
+  delete state.rtmLog;
+  delete state.bcciTradeRevenue;
+
+  if (state.rules) {
+    if (state.rules.clawAvailable === undefined && state.rules.rtmAvailable !== undefined) {
+      state.rules.clawAvailable = state.rules.rtmAvailable;
+    }
+    if (state.rules.xFactor === undefined && state.rules.impactPlayer !== undefined) {
+      state.rules.xFactor = state.rules.impactPlayer;
+    }
+    delete state.rules.rtmAvailable;
+    delete state.rules.impactPlayer;
+  }
+
+  for (const player of state.players || []) {
+    if (player.isRppReplacement === undefined && player.isRappReplacement !== undefined) {
+      player.isRppReplacement = player.isRappReplacement;
+    }
+    delete player.isRappReplacement;
+  }
+
+  for (const franchise of state.franchises || []) {
+    if (franchise.clawCards === undefined && franchise.rtmCards !== undefined) {
+      franchise.clawCards = franchise.rtmCards;
+    }
+    if (franchise.clawUsed === undefined && franchise.rtmUsed !== undefined) {
+      franchise.clawUsed = franchise.rtmUsed;
+    }
+    delete franchise.rtmCards;
+    delete franchise.rtmUsed;
+  }
+
+  for (const trade of state.trades || []) {
+    if (!trade || typeof trade !== 'object') continue;
+    if (approvalAliases[trade.status]) trade.status = approvalAliases[trade.status];
+    if (approvalAliases[trade.approval]) trade.approval = approvalAliases[trade.approval];
+    if (trade.transferFee && trade.transferFee.lcbCut === undefined && trade.transferFee.bcciCut !== undefined) {
+      trade.transferFee.lcbCut = trade.transferFee.bcciCut;
+    }
+    if (trade.transferFee) delete trade.transferFee.bcciCut;
+    for (const entry of trade.timeline || []) {
+      if (approvalAliases[entry.status]) entry.status = approvalAliases[entry.status];
+    }
+  }
+
+  const renameEvent = (event) => {
+    if (!event || typeof event !== 'object' || typeof event.type !== 'string') return;
+    event.type = event.type.replace(/^RTM_/, 'CLAW_').replace(/^RAPP_/, 'RPP_');
+    if (event.type === 'RTM') event.type = 'CLAW';
+    if (event.type === 'RAPP') event.type = 'RPP';
+  };
+  for (const event of state.eventLog || []) renameEvent(event);
+  for (const entry of state.bidHistory || []) {
+    if (typeof entry?.source === 'string' && entry.source.startsWith('RTM')) {
+      entry.source = `CLAW${entry.source.slice(3)}`;
+    }
+  }
+  return state;
 }
 
 /** Strict structural validation — throws with a precise reason on bad saves. */
@@ -140,6 +221,7 @@ export function createStore(file) {
         return { state: null, hasSave: true, saveError: `save is not valid JSON: ${error.message}` };
       }
       try {
+        migrateLegacyNames(parsed);
         validateState(parsed);
       } catch (error) {
         corrupt = true;

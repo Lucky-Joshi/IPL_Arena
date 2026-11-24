@@ -13,9 +13,9 @@ import {
   phaseSecondsRemaining,
   playerById,
   projectedBid,
-  RTM_PHASES,
-  rtmActor,
-  rtmOptions,
+  CLAW_PHASES,
+  clawActor,
+  clawOptions,
   squadLimit,
 } from '../lib/format';
 
@@ -45,8 +45,8 @@ export default function BidPanel({ state, player, onAction, busy }) {
   const nominated = Boolean(player && state.nominations?.includes(player.id));
 
   let bidBlock = '';
-  if (RTM_PHASES.includes(state.phase)) {
-    bidBlock = 'Right to Match is being resolved — bidding resumes after the decision.';
+  if (CLAW_PHASES.includes(state.phase)) {
+    bidBlock = 'Franchise Clawback is being resolved — bidding resumes after the decision.';
   } else if (!bidOpen) {
     bidBlock = state.phase === 'OPENING' || state.phase === 'FINAL_REVIEW'
       ? 'Lead auctioneer is speaking — bids open with the next lot.'
@@ -65,11 +65,11 @@ export default function BidPanel({ state, player, onAction, busy }) {
   const activePhase = !['SETUP', 'COMPLETED', 'SET_BREAK', 'STRATEGY_BREAK'].includes(state.phase);
   const canWithdraw = bidOpen && !withdrawn && Boolean(state.activeBidderIds?.includes(me.id));
   const showContinue = stage?.kind === 'ANNOUNCEMENT' && state.phase !== 'COMPLETED';
-  const rtmDecisionActor = rtmActor(state);
-  const isRtmTurn = rtmDecisionActor === me.id;
-  const rtmPlayer = playerById(state, state.rtm?.playerId);
-  const rtmOriginal = franchiseById(state, state.rtm?.originalFranchiseId);
-  const rtmLeader = franchiseById(state, state.rtm?.leaderFranchiseId);
+  const clawDecisionActor = clawActor(state);
+  const isClawTurn = clawDecisionActor === me.id;
+  const clawPlayer = playerById(state, state.claw?.playerId);
+  const clawOriginal = franchiseById(state, state.claw?.originalFranchiseId);
+  const clawLeader = franchiseById(state, state.claw?.leaderFranchiseId);
   const secondsLeft = phaseSecondsRemaining(state);
   const countdown = countdownLabel(state);
   const urgent = state.phase === 'GOING_TWICE' || (secondsLeft > 0 && secondsLeft <= 2);
@@ -105,24 +105,24 @@ export default function BidPanel({ state, player, onAction, busy }) {
         <div><span>STATUS</span><strong className={`status-${String(me.biddingStatus || 'IDLE').toLowerCase()}`}>{me.biddingStatus || 'IDLE'}</strong></div>
       </div>
 
-      {state.rtm && RTM_PHASES.includes(state.phase) && (
-        <div className={`rtm-panel ${isRtmTurn ? 'is-my-turn' : ''}`} role="group" aria-label="Right to Match decision">
-          <div className="rtm-heading">
-            <span>RIGHT TO MATCH</span>
-            <strong>{cr(state.rtm.price)}</strong>
+      {state.claw && CLAW_PHASES.includes(state.phase) && (
+        <div className={`claw-panel ${isClawTurn ? 'is-my-turn' : ''}`} role="group" aria-label="Franchise Clawback decision">
+          <div className="claw-heading">
+            <span>FRANCHISE CLAWBACK</span>
+            <strong>{cr(state.claw.price)}</strong>
           </div>
-          <p className="rtm-detail">
-            <strong>{rtmPlayer?.name || 'Player'}</strong> · {rtmOriginal?.short || '—'} (previous franchise)
-            vs {rtmLeader?.short || '—'} (leading bidder)
+          <p className="claw-detail">
+            <strong>{clawPlayer?.name || 'Player'}</strong> · {clawOriginal?.short || '—'} (previous franchise)
+            vs {clawLeader?.short || '—'} (leading bidder)
           </p>
-          <p className={`rtm-turn ${isRtmTurn ? 'is-mine' : ''}`}>
-            {isRtmTurn
+          <p className={`claw-turn ${isClawTurn ? 'is-mine' : ''}`}>
+            {isClawTurn
               ? 'Your call — choose how your franchise responds.'
-              : `Waiting for ${franchiseById(state, rtmDecisionActor)?.short || 'the other franchise'} to decide.`}
+              : `Waiting for ${franchiseById(state, clawDecisionActor)?.short || 'the other franchise'} to decide.`}
           </p>
-          {isRtmTurn && (
+          {isClawTurn && (
             <div className="bid-action-grid">
-              {rtmOptions(state).map((option) => (
+              {clawOptions(state).map((option) => (
                 <button
                   key={option.type}
                   type="button"

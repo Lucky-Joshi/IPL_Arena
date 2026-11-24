@@ -146,8 +146,8 @@ function TradeCard({ state, trade, me, onAction, busy }) {
         {trade.transferFee?.total > 0 && (
           <small>
             {' '}Off-purse transfer fee {cr(trade.transferFee.total)}
-            {trade.transferFee.bcciCut !== undefined
-              ? ` → BCCI ${cr(trade.transferFee.bcciCut)} · player(s) ${cr(trade.transferFee.playerAmount)} · seller ${cr(trade.transferFee.sellerAmount)}`
+            {trade.transferFee.lcbCut !== undefined
+              ? ` → LCB ${cr(trade.transferFee.lcbCut)} · player(s) ${cr(trade.transferFee.playerAmount)} · seller ${cr(trade.transferFee.sellerAmount)}`
               : ` · player share up to ${trade.transferFee.playerSharePct}% of the remainder`}
           </small>
         )}
@@ -323,15 +323,15 @@ export default function TradeDesk({ state, onAction, busy }) {
     <div className="trade-desk">
       <section className={`panel trade-banner ${windowInfo.open ? 'is-open' : ''}`}>
         <div className="panel-heading">
-          <h3>BCCI Trade Desk</h3>
+          <h3>League Control Board Trade Desk</h3>
           <span className="panel-tag">{windowInfo.open ? window : 'CLOSED'}</span>
         </div>
         <p><strong>{windowInfo.label}.</strong> {windowInfo.detail}</p>
         <ol className="trade-protocol">
-          <li>EOI filed with the BCCI</li>
+          <li>EOI filed with the League Control Board</li>
           <li>Current franchise answers within 48 hours</li>
           <li>Negotiation + written player consent (a veto voids the deal)</li>
-          <li>BCCI vets salary caps, squad limits and anti-tampering, then approves</li>
+          <li>The League Control Board vets salary caps, squad limits and anti-tampering, then approves</li>
         </ol>
         {mine && (
           <p className="trade-purse-line">
@@ -386,12 +386,12 @@ export default function TradeDesk({ state, onAction, busy }) {
                   Player share of remainder (%, max 50)
                   <input type="number" min="0" max="50" step="5" value={playerSharePct} onChange={(event) => setPlayerSharePct(event.target.value)} />
                 </label>
-                <small>BCCI takes 50% of any transfer fee; the player(s) may take up to half of the rest; the selling franchise keeps the balance. No purse is touched.</small>
+                <small>The League Control Board takes 50% of any transfer fee; the player(s) may take up to half of the rest; the selling franchise keeps the balance. No purse is touched.</small>
               </div>
             )}
             <div className="trade-actions">
               <button type="button" className="btn btn-primary" disabled={busy || !canSubmit} onClick={submitProposal}>
-                Submit EOI to the BCCI
+                Submit EOI to the League Control Board
               </button>
               <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => onAction('RUN_AI_TRADES', { limit: 3 })}>
                 Scout rival trade activity
@@ -424,7 +424,7 @@ export default function TradeDesk({ state, onAction, busy }) {
             <p className="feed-empty">
               {windowInfo.open
                 ? 'No trades yet. File an EOI above — or scout what the rival franchises are planning.'
-                : 'No trades registered. The desk reopens in the next BCCI window.'}
+                : 'No trades registered. The desk reopens in the next LCB window.'}
             </p>
           )}
         </div>
@@ -466,7 +466,7 @@ export default function TradeDesk({ state, onAction, busy }) {
           <div className="trade-actions">
             <button type="button" className="btn btn-ghost" disabled={busy || !reportFranchise || !reportPlayer}
               onClick={() => onAction('REPORT_TAMPERING', { franchiseId: reportFranchise, playerId: reportPlayer, details: reportDetails })}>
-              Report to the BCCI
+              Report to the League Control Board
             </button>
           </div>
         </div>

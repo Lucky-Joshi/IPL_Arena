@@ -15,6 +15,7 @@ import {
 } from '../src/engine.js';
 import { fallbackDecide } from '../src/aiClient.js';
 import { generatePlayers } from '../src/players.js';
+import { migrateLegacyNames } from '../src/persistence.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const BACKEND = path.join(ROOT, 'backend');
@@ -26,7 +27,7 @@ const SAVE_FILE = path.join(BACKEND, 'data', 'smoke-state.json');
 const TICK_MS = 100;
 // Automated scenarios stay on FAST; the pacing scenario explicitly checks BROADCAST.
 const CONFIG = { tickMs: TICK_MS, pace: 'FAST' };
-const RTM_PHASES = new Set(['RTM_OFFER', 'RTM_COUNTER', 'RTM_MATCH']);
+const CLAW_PHASES = new Set(['CLAW_OFFER', 'CLAW_COUNTER', 'CLAW_MATCH']);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -191,9 +192,9 @@ function assertInvariants(state, label = 'auction') {
     // bidHistory is append-only, so array order is the authoritative chronology.
     let leader = null;
     for (const bid of bids) {
-      // RTM entries are settlement records, not paddle raises, so a franchise
+      // CLAW entries are settlement records, not paddle raises, so a franchise
       // can legitimately appear twice when a lot is matched or passed through.
-      if (String(bid.source || '').startsWith('RTM')) {
+      if (String(bid.source || '').startsWith('CLAW')) {
         leader = bid.franchiseId;
         continue;
       }
@@ -210,13 +211,13 @@ async function advanceHttp(state) {
   if (phase === 'PLAYER_INTRODUCTION') return act({ action: 'OPEN_BIDDING' });
   if (phase === 'OPENING' || phase === 'FINAL_REVIEW') return act({ action: 'CONTINUE' });
   if (phase === 'SOLD' || phase === 'UNSOLD') return act({ action: 'NEXT' });
-  if (RTM_PHASES.has(phase)) {
-    const actor = phase === 'RTM_COUNTER' ? state.rtm?.leaderFranchiseId : state.rtm?.originalFranchiseId;
+  if (CLAW_PHASES.has(phase)) {
+    const actor = phase === 'CLAW_COUNTER' ? state.claw?.leaderFranchiseId : state.claw?.originalFranchiseId;
     if (actor === state.userFranchiseId) {
-      const action = phase === 'RTM_COUNTER' ? 'RTM_DECLINE' : 'PASS_RTM';
+      const action = phase === 'CLAW_COUNTER' ? 'CLAW_DECLINE' : 'PASS_CLAW';
       return act({ action, franchiseId: actor });
     }
-    await sleep(TICK_MS + 5); // AI RTM decisions resolve on a tick
+    await sleep(TICK_MS + 5); // AI CLAW decisions resolve on a tick
     return null;
   }
   if (relevantPhases(state).has(phase)) {
@@ -256,13 +257,13 @@ function advanceEngine(engine, state) {
   if (phase === 'PLAYER_INTRODUCTION') return engine.dispatch({ type: 'OPEN_BIDDING' });
   if (phase === 'OPENING' || phase === 'FINAL_REVIEW') return engine.dispatch({ type: 'CONTINUE' });
   if (phase === 'SOLD' || phase === 'UNSOLD') return engine.dispatch({ type: 'NEXT' });
-  if (RTM_PHASES.has(phase)) {
-    const actor = phase === 'RTM_COUNTER' ? state.rtm?.leaderFranchiseId : state.rtm?.originalFranchiseId;
+  if (CLAW_PHASES.has(phase)) {
+    const actor = phase === 'CLAW_COUNTER' ? state.claw?.leaderFranchiseId : state.claw?.originalFranchiseId;
     if (actor === state.userFranchiseId) {
-      const type = phase === 'RTM_COUNTER' ? 'RTM_DECLINE' : 'PASS_RTM';
+      const type = phase === 'CLAW_COUNTER' ? 'CLAW_DECLINE' : 'PASS_CLAW';
       return engine.dispatch({ type, franchiseId: actor });
     }
-    return null; // AI RTM decisions resolve on the next tick
+    return null; // AI CLAW decisions resolve on the next tick
   }
   if (relevantPhases(state).has(phase)) {
     if ((state.bidsThisLot || 0) >= 2 || phase === 'GOING_ONCE' || phase === 'GOING_TWICE') {
@@ -490,7 +491,7 @@ async function scenarioRetentions() {
   assert.equal(state.config.startingPurse, 120);
   assert.equal(state.config.totalSalaryCap, 146);
   assert.ok(state.franchises.every((f) => f.squad.length === 0 && f.retentions.length === 0));
-  assert.ok(state.franchises.every((f) => f.rtmCards === 6), 'each franchise starts with 6 RTM cards');
+  assert.ok(state.franchises.every((f) => f.clawCards === 6), 'each franchise starts with 6 CLAW cards');
   assert.equal(state.retentionsConfirmed, false);
 
   // A franchise can only retain players from its own previous-season contracts.
@@ -518,7 +519,7 @@ async function scenarioRetentions() {
   state = mega.getState();
   const mine = state.franchises.find((f) => f.id === 'F1');
   assert.equal(mine.retentions.length, 6);
-  assert.equal(mine.rtmCards, 0, 'six retentions consume every RTM card');
+  assert.equal(mine.clawCards, 0, 'six retentions consume every CLAW card');
   assert.equal(mine.retentionSpent, expectedCost);
   assert.ok(Math.abs(mine.purse - (120 - expectedCost)) < 0.001, 'purse not debited');
   assert.deepEqual(mine.retentions.filter((r) => r.capped !== false).map((r) => r.cost), [18, 14, 11, 18, 14]);
@@ -534,10 +535,10 @@ async function scenarioRetentions() {
     assert.ok(rival.retentions.length > 0 && rival.retentions.length <= 6, `${rival.id} AI retention count out of range`);
     assert.ok(rival.retentions.filter((r) => r.capped !== false).length <= 5, `${rival.id} too many capped retentions`);
     assert.ok(rival.retentions.filter((r) => r.capped === false).length <= 2, `${rival.id} too many uncapped retentions`);
-    assert.equal(rival.rtmCards, 6 - rival.retentions.length, `${rival.id} RTM card count wrong`);
+    assert.equal(rival.clawCards, 6 - rival.retentions.length, `${rival.id} CLAW card count wrong`);
   }
   assert.equal(state.retentionsConfirmed, true);
-  pass('2025 MEGA: own-contract retentions / capped+uncapped slabs / RTM cards / AI auto-pick');
+  pass('2025 MEGA: own-contract retentions / capped+uncapped slabs / CLAW cards / AI auto-pick');
 
   if (uncappedPool.length >= 3) {
     const threeUncapped = [...cappedPool.slice(0, 3), ...uncappedPool.slice(0, 3)].map((p) => p.id);
@@ -556,13 +557,13 @@ async function scenarioRetentions() {
   state = mega.getState();
   assert.equal(state.franchises[0].retentions.length, 0);
   assert.equal(state.franchises[0].purse, 120);
-  assert.equal(state.franchises[0].rtmCards, 6);
+  assert.equal(state.franchises[0].clawCards, 6);
   for (const id of picks) {
     const player = state.players.find((p) => p.id === id);
     assert.equal(player.availability, 'AVAILABLE');
     assert.equal(player.retained, false);
   }
-  pass('2025 MEGA: re-selection restores players, purse and RTM cards');
+  pass('2025 MEGA: re-selection restores players, purse and CLAW cards');
 
   const autoStart = AuctionEngine.create({ season: '2025', format: 'MEGA', config: CONFIG, persist: () => {} });
   const started = autoStart.dispatch({ type: 'START' });
@@ -573,14 +574,14 @@ async function scenarioRetentions() {
   assert.notEqual(autoState.phase, 'SETUP');
   pass('zero-retention start confirms an empty selection for the human');
 
-  // ---- 2026 MINI: contract fees, no RTM, adaptive additionsLimit ----
+  // ---- 2026 MINI: contract fees, no CLAW, adaptive additionsLimit ----
   const mini = AuctionEngine.create({ season: '2026', format: 'MINI', config: CONFIG, persist: () => {} });
   let miniState = mini.getState();
   assert.equal(miniState.config.startingPurse, 125);
   assert.equal(miniState.config.totalSalaryCap, 151);
   assert.equal(miniState.config.overseasSalaryCap, 18);
   assert.equal(miniState.config.maxRetentions, 25);
-  assert.ok(miniState.franchises.every((f) => f.rtmCards === 0));
+  assert.ok(miniState.franchises.every((f) => f.clawCards === 0));
 
   const miniOwned = miniState.players.filter((p) => p.previousFranchiseId === 'F1' && p.retentionCandidate)
     .sort((a, b) => b.rating - a.rating || a.id.localeCompare(b.id));
@@ -593,7 +594,7 @@ async function scenarioRetentions() {
   assert.equal(miniState.franchises[0].retentions.length, 10);
   assert.equal(miniState.franchises[0].retentionSpent, miniCost, 'Mini retentions must use contract fees');
   assert.ok(Math.abs(miniState.franchises[0].purse - (125 - miniCost)) < 0.001);
-  assert.ok(miniState.franchises.slice(1).every((f) => f.retentions.length > 0 && f.rtmCards === 0));
+  assert.ok(miniState.franchises.slice(1).every((f) => f.retentions.length > 0 && f.clawCards === 0));
   assert.ok(miniState.franchises[0].additionsLimit <= 15, 'ten retentions should reduce additions room');
 
   const overCap = mini.dispatch({ type: 'SET_RETENTIONS', playerIds: miniOwned.map((p) => p.id) });
@@ -607,7 +608,7 @@ async function scenarioRetentions() {
   miniState = mini.getState();
   assert.ok(miniState.franchises[0].additionsLimit >= miniState.config.minSquad,
     'zero retentions must permit reaching minSquad');
-  pass('2026 MINI: contract-fee retentions / no RTM / full squad / adaptive additionsLimit');
+  pass('2026 MINI: contract-fee retentions / no CLAW / full squad / adaptive additionsLimit');
 
   // ---- results totals and salary-cap reporting ----
   const direct = AuctionEngine.create({ season: '2025', format: 'MEGA', config: CONFIG, persist: () => {} });
@@ -681,7 +682,7 @@ async function scenarioMiniAuction() {
       assert.ok(franchise.squad.includes(playerId), `${id} lost retained player ${playerId}`);
     }
   }
-  for (const phase of ['RTM_OFFER', 'RTM_COUNTER', 'RTM_MATCH']) {
+  for (const phase of ['CLAW_OFFER', 'CLAW_COUNTER', 'CLAW_MATCH']) {
     assert.equal(phases.has(phase), false, `Mini Auction must never enter ${phase}`);
   }
 
@@ -698,7 +699,7 @@ async function scenarioMiniAuction() {
   const check = validateBid(capped.getState(), 'F1', amount);
   assert.equal(check.ok, false, 'bid past additionsLimit must be rejected');
   assert.match(check.error || '', /addition|squad|limit/i);
-  pass('2026 MINI: real purse/caps, own retentions persist, no RTM, additions cap enforced');
+  pass('2026 MINI: real purse/caps, own retentions persist, no CLAW, additions cap enforced');
 }
 
 async function scenarioSaveResume() {
@@ -760,7 +761,7 @@ async function scenarioAccelerationAndResults() {
   assert.equal(source.unsold.length, source.unsoldCount);
   pass(`final review COMPLETED / results consistent (${source.soldCount} sold, ${source.unsoldCount} unsold)`);
 
-  // A completed auction opens POST_AUCTION; the same BCCI rules apply over HTTP.
+  // A completed auction opens POST_AUCTION; the same LCB rules apply over HTTP.
   const scouted = await act({ action: 'RUN_AI_TRADES', limit: 3 });
   const purseDebug = final.franchises.map((f) => `${f.id}=${Number(f.purse).toFixed(2)}`).join(' ');
   assert.equal(scouted.ok, true, `HTTP RUN_AI_TRADES failed: ${scouted.error} [purses: ${purseDebug}]`);
@@ -794,7 +795,7 @@ async function scenarioAccelerationAndResults() {
   const ruledCase = await act({ action: 'RULE_TAMPERING', caseId, upheld: false });
   assert.equal(ruledCase.ok, true, `HTTP RULE_TAMPERING failed: ${ruledCase.error}`);
   assert.equal(ruledCase.state.tamperingCases.find((record) => record.id === caseId).status, 'DISMISSED');
-  pass('HTTP: tampering report and BCCI ruling round-trip');
+  pass('HTTP: tampering report and LCB ruling round-trip');
 }
 
 async function scenarioPacingAndEarlyBid() {
@@ -847,8 +848,8 @@ async function scenarioPacingAndEarlyBid() {
   pass('BROADCAST pace holds bidding for 5 ticks before Going Once');
 }
 
-async function scenarioRtmFlow() {
-  // Find a lot that belongs to the human franchise so it is offered the RTM.
+async function scenarioClawFlow() {
+  // Find a lot that belongs to the human franchise so it is offered the CLAW.
   const seed = AuctionEngine.create({
     season: '2025', format: 'MEGA', userFranchiseId: 'F1', config: CONFIG, persist: () => {},
   });
@@ -871,59 +872,59 @@ async function scenarioRtmFlow() {
   snapshot.currentBid = bid;
   snapshot.bidsThisLot = 2;
   snapshot.leaderId = 'F2';
-  snapshot.rtm = null;
+  snapshot.claw = null;
 
   const passAi = stubAi(() => ({ action: 'PASS', amount: 0, confidence: 0.3, publicComment: 'We hold.' }));
-  const rtmEngine = new AuctionEngine(snapshot, { aiClient: passAi, persist: () => {} });
-  const close = rtmEngine.dispatch({ type: 'NEXT' });
+  const clawEngine = new AuctionEngine(snapshot, { aiClient: passAi, persist: () => {} });
+  const close = clawEngine.dispatch({ type: 'NEXT' });
   assert.equal(close.ok, true, `closing the lot failed: ${close.error}`);
-  let state = rtmEngine.getState();
-  assert.equal(state.phase, 'RTM_OFFER', 'a sold lot should first enter RTM_OFFER');
-  assert.equal(state.rtm.playerId, target.id);
-  assert.equal(state.rtm.originalFranchiseId, 'F1');
-  assert.equal(state.rtm.leaderFranchiseId, 'F2');
-  assert.equal(state.rtm.bid, bid);
-  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmCards, 6, 'the offer itself must not spend a card');
+  let state = clawEngine.getState();
+  assert.equal(state.phase, 'CLAW_OFFER', 'a sold lot should first enter CLAW_OFFER');
+  assert.equal(state.claw.playerId, target.id);
+  assert.equal(state.claw.originalFranchiseId, 'F1');
+  assert.equal(state.claw.leaderFranchiseId, 'F2');
+  assert.equal(state.claw.bid, bid);
+  assert.equal(state.franchises.find((f) => f.id === 'F1').clawCards, 6, 'the offer itself must not spend a card');
 
-  const wrong = rtmEngine.dispatch({ type: 'USE_RTM', franchiseId: 'F2' });
+  const wrong = clawEngine.dispatch({ type: 'USE_CLAW', franchiseId: 'F2' });
   assert.equal(wrong.ok, false, 'a human must not decide for another franchise');
-  const used = rtmEngine.dispatch({ type: 'USE_RTM', franchiseId: 'F1' });
-  assert.equal(used.ok, true, `USE_RTM failed: ${used.error}`);
-  state = rtmEngine.getState();
-  assert.equal(state.phase, 'RTM_COUNTER');
-  assert.equal(state.rtm.usedCard, true);
-  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmCards, 5, 'USE_RTM spends exactly one card');
-  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmUsed, 1);
+  const used = clawEngine.dispatch({ type: 'USE_CLAW', franchiseId: 'F1' });
+  assert.equal(used.ok, true, `USE_CLAW failed: ${used.error}`);
+  state = clawEngine.getState();
+  assert.equal(state.phase, 'CLAW_COUNTER');
+  assert.equal(state.claw.usedCard, true);
+  assert.equal(state.franchises.find((f) => f.id === 'F1').clawCards, 5, 'USE_CLAW spends exactly one card');
+  assert.equal(state.franchises.find((f) => f.id === 'F1').clawUsed, 1);
 
-  await rtmEngine.tick();
-  state = rtmEngine.getState();
-  assert.equal(state.phase, 'RTM_MATCH', 'AI counter/decline should open the final call');
-  assert.ok(state.rtm.log.some((entry) => entry.step === 'COUNTERED')
-    || state.rtm.log.some((entry) => entry.step === 'DECLINED'), 'counter step was not logged');
-  const finalPrice = state.rtm.price;
-  const matched = rtmEngine.dispatch({ type: 'MATCH_RTM', franchiseId: 'F1' });
-  assert.equal(matched.ok, true, `MATCH_RTM failed: ${matched.error}`);
-  state = rtmEngine.getState();
+  await clawEngine.tick();
+  state = clawEngine.getState();
+  assert.equal(state.phase, 'CLAW_MATCH', 'AI counter/decline should open the final call');
+  assert.ok(state.claw.log.some((entry) => entry.step === 'COUNTERED')
+    || state.claw.log.some((entry) => entry.step === 'DECLINED'), 'counter step was not logged');
+  const finalPrice = state.claw.price;
+  const matched = clawEngine.dispatch({ type: 'MATCH_CLAW', franchiseId: 'F1' });
+  assert.equal(matched.ok, true, `MATCH_CLAW failed: ${matched.error}`);
+  state = clawEngine.getState();
   assert.equal(state.phase, 'SOLD');
   const awarded = state.players.find((p) => p.id === target.id);
   assert.equal(awarded.soldTo, 'F1');
   assert.equal(awarded.soldPrice, finalPrice);
   assert.ok(state.franchises.find((f) => f.id === 'F1').squad.includes(target.id));
-  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmCards, 5, 'matching must not spend a second card');
-  assert.ok(state.rtmLog.some((entry) => entry.playerId === target.id && entry.step === 'MATCHED'));
-  pass('2025 RTM: OFFER → COUNTER → MATCH, one card spent, player awarded at final price');
+  assert.equal(state.franchises.find((f) => f.id === 'F1').clawCards, 5, 'matching must not spend a second card');
+  assert.ok(state.clawLog.some((entry) => entry.playerId === target.id && entry.step === 'MATCHED'));
+  pass('2025 CLAW: OFFER → COUNTER → MATCH, one card spent, player awarded at final price');
 
   const passEngine = new AuctionEngine(snapshot, { aiClient: passAi, persist: () => {} });
   passEngine.dispatch({ type: 'NEXT' });
-  assert.equal(passEngine.getState().phase, 'RTM_OFFER');
-  const passed = passEngine.dispatch({ type: 'PASS_RTM', franchiseId: 'F1' });
-  assert.equal(passed.ok, true, `PASS_RTM failed: ${passed.error}`);
+  assert.equal(passEngine.getState().phase, 'CLAW_OFFER');
+  const passed = passEngine.dispatch({ type: 'PASS_CLAW', franchiseId: 'F1' });
+  assert.equal(passed.ok, true, `PASS_CLAW failed: ${passed.error}`);
   state = passEngine.getState();
   assert.equal(state.phase, 'SOLD');
   assert.equal(state.players.find((p) => p.id === target.id).soldTo, 'F2');
-  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmCards, 6, 'passing must keep the card');
-  assert.equal(state.franchises.find((f) => f.id === 'F1').rtmUsed, 0);
-  pass('2025 RTM: PASS_RTM awards the lot to the leader without spending a card');
+  assert.equal(state.franchises.find((f) => f.id === 'F1').clawCards, 6, 'passing must keep the card');
+  assert.equal(state.franchises.find((f) => f.id === 'F1').clawUsed, 0);
+  pass('2025 CLAW: PASS_CLAW awards the lot to the leader without spending a card');
 }
 
 async function scenarioSalaryAndSeasonOps() {
@@ -932,7 +933,7 @@ async function scenarioSalaryAndSeasonOps() {
   assert.deepEqual(salarySplit(25, false, '2026'), { bid: 25, salary: 25, welfare: 0, capped: false });
   assert.deepEqual(salarySplit(20, true, '2027'), { bid: 20, salary: 18, welfare: 2, capped: true });
   assert.equal(matchFeeProjection('2025'), 12.6, '₹7.5 lakh × 12 × 14');
-  pass('salary split / welfare diversion / match-fee projection match BCCI limits');
+  pass('salary split / welfare diversion / match-fee projection match LCB limits');
 
   const season2027 = AuctionEngine.create({ season: '2027', format: 'MINI', config: CONFIG, persist: () => {} });
   const rules27 = season2027.getState();
@@ -951,7 +952,7 @@ async function scenarioSalaryAndSeasonOps() {
   const seed = base.getState();
   assert.notEqual(seed.stageIndex, -1, 'need an active set before forcing a sale');
   const available = seed.players.filter((p) => p.availability === 'AVAILABLE' && p.nationality && p.nationality !== 'India');
-  assert.ok(available.length >= 3, 'need overseas players in the RAPP for salary/trade checks');
+  assert.ok(available.length >= 3, 'need overseas players in the RPP for salary/trade checks');
   const target = available[0];
   const snapshot = clone(seed);
   snapshot.phase = 'GOING_TWICE';
@@ -960,7 +961,7 @@ async function scenarioSalaryAndSeasonOps() {
   snapshot.currentBid = 25;
   snapshot.bidsThisLot = 2;
   snapshot.leaderId = 'F2';
-  snapshot.rtm = null;
+  snapshot.claw = null;
   const purseBefore = snapshot.franchises.find((f) => f.id === 'F2').purse;
   const osSpendBefore = Number(snapshot.franchises.find((f) => f.id === 'F2').overseasSalarySpend) || 0;
   const passAi = stubAi(() => ({ action: 'PASS', amount: 0, confidence: 0.3, publicComment: 'We hold.' }));
@@ -1095,7 +1096,7 @@ async function scenarioSalaryAndSeasonOps() {
   });
   assert.equal(consented.ok, true, `PLAYER_TRADE_CONSENT failed: ${consented.error}`);
   assert.equal(consented.trade.status, 'APPROVED');
-  assert.equal(consented.trade.approval, 'BCCI_APPROVED');
+  assert.equal(consented.trade.approval, 'LCB_APPROVED');
   ts = setup.getState();
   const f1After = ts.franchises.find((f) => f.id === 'F1');
   const f2After = ts.franchises.find((f) => f.id === 'F2');
@@ -1105,8 +1106,8 @@ async function scenarioSalaryAndSeasonOps() {
   assert.equal(f1After.tradeCashDelta, fee);
   assert.equal(f2After.tradeCashDelta, -fee);
   assert.equal(ts.players.find((p) => p.id === star.id).previousFranchiseId, 'F2');
-  // Transfer fee: BCCI 50%, player up to 50% of the remainder, seller the rest.
-  assert.equal(ts.bcciTradeRevenue, 1);
+  // Transfer fee: LCB 50%, player up to 50% of the remainder, seller the rest.
+  assert.equal(ts.lcbTradeRevenue, 1);
   assert.equal(f1After.transferFeeEarned, 0.5);
   assert.equal(ts.players.find((p) => p.id === star.id).transferFeeEarned, 0.5);
   assert.equal(f1After.purse, money(purseHumanBefore + fee), 'the transfer fee never touches a purse');
@@ -1120,10 +1121,10 @@ async function scenarioSalaryAndSeasonOps() {
   assert.equal(rowF1.tradedOutCount, 1);
   assert.equal(rowF1.purseSpent, money(Number(f1After.retentionSpent) - fee));
   assert.equal(rowF2.purseSpent, money(Number(f2After.retentionSpent) + fee));
-  assert.equal(tradeResults.bcciTradeRevenue, 1);
+  assert.equal(tradeResults.lcbTradeRevenue, 1);
   assert.equal(tradeResults.trades[0].fromName, f1After.name);
   assert.equal(tradeResults.trades[0].givePlayers[0].fee, fee);
-  pass('trades: EOI → 48h answer → consent → BCCI approval, exact fee and transfer-fee split');
+  pass('trades: EOI → 48h answer → consent → LCB approval, exact fee and transfer-fee split');
 
   // A veto voids an otherwise accepted deal without moving any player or cash.
   const vetoEoi = setup.dispatch({
@@ -1236,11 +1237,11 @@ async function scenarioSalaryAndSeasonOps() {
     type: 'PLAYER_TRADE_CONSENT', tradeId: amendEoi.trade.id, playerId: third.id, consent: true,
   });
   assert.equal(amendedConsent.trade.status, 'APPROVED');
-  assert.equal(amendedConsent.trade.transferFee.bcciCut, 1);
-  assert.equal(setup.getState().bcciTradeRevenue, 2, 'amended transfer fee settles through the BCCI ledger');
+  assert.equal(amendedConsent.trade.transferFee.lcbCut, 1);
+  assert.equal(setup.getState().lcbTradeRevenue, 2, 'amended transfer fee settles through the LCB ledger');
   pass('trades: AMEND_TRADE renegotiates the transfer fee, not the fixed league fee');
 
-  // BCCI vetting rejects deals that would breach purse or squad limits.
+  // LCB vetting rejects deals that would breach purse or squad limits.
   const guardState = clone(setup.getState());
   const guard = new AuctionEngine(guardState, { persist: () => {} });
   guard.state.franchises.find((f) => f.id === 'F4').purse = 0;
@@ -1260,7 +1261,7 @@ async function scenarioSalaryAndSeasonOps() {
   });
   assert.equal(noSlot.ok, false, 'a deal that exceeds the receiving squad limit must be rejected');
   assert.match(noSlot.error || '', /squad limit/i);
-  pass('trades: BCCI vetting blocks unfunded deals and squad-limit breaches');
+  pass('trades: LCB vetting blocks unfunded deals and squad-limit breaches');
 
   // Anti-tampering: an upheld allegation fines the purse and bans the player.
   const offender = ts.franchises.find((f) => f.id === 'F6');
@@ -1292,7 +1293,7 @@ async function scenarioSalaryAndSeasonOps() {
   assert.equal(aiRun.ok, true, `RUN_AI_TRADES failed: ${aiRun.error}`);
   assert.ok(aiRun.trades.length >= 1, 'expected at least one budget-valid rival EOI');
   for (const rivalTrade of aiRun.trades) assert.equal(rivalTrade.window, 'POST_SEASON');
-  pass(`AI trades: ${aiRun.trades.length} rival EOI(s) filed through the BCCI rules engine`);
+  pass(`AI trades: ${aiRun.trades.length} rival EOI(s) filed through the LCB rules engine`);
 
   const withheldSnapshot = clone(setup.getState());
   withheldSnapshot.players.find((p) => p.id === second.id).consentWithheld = true;
@@ -1345,22 +1346,22 @@ async function scenarioSalaryAndSeasonOps() {
   state = engine.getState();
   assert.equal(state.players.find((p) => p.id === target.id).availability, 'INJURED');
   const replacements = state.players.filter((p) => p.availability === 'AVAILABLE' && p.id !== target.id);
-  assert.ok(replacements.length >= 2, 'need two RAPP players');
+  assert.ok(replacements.length >= 2, 'need two RPP players');
   const purseBeforeReplacement = state.franchises.find((f) => f.id === 'F2').purse;
   const signed = engine.dispatch({
     type: 'SIGN_INJURY_REPLACEMENT', injuredPlayerId: target.id, replacementPlayerId: replacements[0].id, fee: 10,
   });
-  assert.equal(signed.ok, true, `RAPP replacement failed: ${signed.error}`);
+  assert.equal(signed.ok, true, `RPP replacement failed: ${signed.error}`);
   state = engine.getState();
-  assert.equal(state.players.find((p) => p.id === replacements[0].id).isRappReplacement, true);
+  assert.equal(state.players.find((p) => p.id === replacements[0].id).isRppReplacement, true);
   assert.ok(state.franchises.find((f) => f.id === 'F2').squad.includes(replacements[0].id));
   assert.equal(state.players.find((p) => p.id === target.id).replacedBy, replacements[0].id);
-  assert.equal(state.franchises.find((f) => f.id === 'F2').purse, purseBeforeReplacement, 'RAPP signing must not debit purse');
+  assert.equal(state.franchises.find((f) => f.id === 'F2').purse, purseBeforeReplacement, 'RPP signing must not debit purse');
   const tooDear = engine.dispatch({
     type: 'SIGN_INJURY_REPLACEMENT', injuredPlayerId: target.id, replacementPlayerId: replacements[1].id, fee: 99,
   });
   assert.equal(tooDear.ok, false, 'replacement fee must respect the injured salary');
-  pass('RAPP: certified injury replacement within salary budget, no purse debit');
+  pass('RPP: certified injury replacement within salary budget, no purse debit');
 
   const withdrawn = engine.dispatch({ type: 'PLAYER_WITHDRAW', playerId: tradeable, certifiedInjury: false });
   assert.equal(withdrawn.ok, true, `PLAYER_WITHDRAW failed: ${withdrawn.error}`);
@@ -1381,15 +1382,47 @@ async function scenarioSalaryAndSeasonOps() {
   pass('results: season rules, welfare and injury/withdrawal reporting');
 }
 
+function scenarioLegacyFictionNames() {
+  const legacy = {
+    phase: 'RTM_OFFER',
+    rtm: { playerId: 'P1' },
+    rtmLog: [],
+    bcciTradeRevenue: 2,
+    rules: { rtmAvailable: true, impactPlayer: 1 },
+    players: [{ id: 'P1', isRappReplacement: true }],
+    franchises: [{ id: 'F1', rtmCards: 3, rtmUsed: 1 }],
+    trades: [{ id: 't1', status: 'BCCI_REVIEW', approval: 'BCCI_REVIEW', transferFee: { bcciCut: 1 }, timeline: [] }],
+    eventLog: [{ type: 'RTM_USED' }],
+    bidHistory: [{ source: 'RTM_MATCH' }],
+  };
+  migrateLegacyNames(legacy);
+  assert.equal(legacy.phase, 'CLAW_OFFER');
+  assert.deepEqual(legacy.claw, { playerId: 'P1' });
+  assert.equal(legacy.lcbTradeRevenue, 2);
+  assert.equal(legacy.rules.clawAvailable, true);
+  assert.equal(legacy.rules.xFactor, 1);
+  assert.equal(legacy.players[0].isRppReplacement, true);
+  assert.equal(legacy.franchises[0].clawCards, 3);
+  assert.equal(legacy.franchises[0].clawUsed, 1);
+  assert.equal(legacy.trades[0].status, 'LCB_REVIEW');
+  assert.equal(legacy.trades[0].approval, 'LCB_REVIEW');
+  assert.equal(legacy.trades[0].transferFee.lcbCut, 1);
+  assert.equal(legacy.eventLog[0].type, 'CLAW_USED');
+  assert.equal(legacy.bidHistory[0].source, 'CLAW_MATCH');
+  for (const key of ['rtm', 'rtmLog', 'bcciTradeRevenue']) assert.equal(key in legacy, false);
+  pass('legacy identifiers migrate to fictional LCB/Clawback/RPP names');
+}
+
 async function main() {
   // Sanity-check the other agents' modules before starting processes.
   assert.equal(generatePlayers().length >= 140, true, 'generatePlayers() should create >=140 players');
   assert.equal(typeof AuctionEngine, 'function');
   assert.equal(typeof computeResults, 'function');
   try {
+    scenarioLegacyFictionNames();
     await scenarioPacingAndEarlyBid();
     await scenarioRetentions();
-    await scenarioRtmFlow();
+    await scenarioClawFlow();
     await scenarioSalaryAndSeasonOps();
     await startChildren();
     await scenarioCreateAndIntro();

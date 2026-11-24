@@ -1,5 +1,5 @@
 /**
- * Auction running order for the BCCI 2025–27 cycle.
+ * Auction running order for the LCB 2025–27 cycle.
  *
  * MEGA opens with two marquee sets, then capped players by role, then the
  * uncapped pool. MINI has no marquee set: it starts directly with capped
