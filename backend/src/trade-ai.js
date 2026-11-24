@@ -171,6 +171,7 @@ export function suggestAiTrades(state, limit = 2) {
   const teams = (state.franchises || []).filter((team) => team.id !== user);
   const benchmark = benchmarkFor(state);
   const window = state.phase === 'SETUP' ? 'POST_SEASON' : 'POST_AUCTION';
+  const claimed = new Set();
 
   const tradeable = (player, owner) => {
     if (!player || player.availability !== 'SOLD') return false;
@@ -180,60 +181,96 @@ export function suggestAiTrades(state, limit = 2) {
     return true;
   };
 
-  for (const franchise of teams) {
-    if (deals.length >= limit) break;
-    const counts = roleCounts(state, franchise);
-    const gapRole = ROLES.find((role) => counts[role] < benchmark[role])
-      || (franchise.targets || [])[0];
-    if (!gapRole) continue;
+  // Whoever receives the higher salary funds the exact difference. Pre-check
+  // both purses so we never hand the engine a deal it must discard.
+  const fundable = (proposer, responder, giveId, getId) => {
+    const difference = salaryOf(state, getId) - salaryOf(state, giveId);
+    if (difference > 0) return Number(proposer.purse) + 1e-9 >= difference;
+    return Number(responder.purse) + 1e-9 >= -difference;
+  };
 
-    // Find the best available target at another franchise that fills the gap.
-    let best = null;
-    let bestOwner = null;
+  const candidatesFor = (franchise, roles) => {
+    const list = [];
     for (const other of state.franchises || []) {
       if (other.id === franchise.id) continue;
       for (const id of other.squad || []) {
         const player = playerOf(state, id);
-        if (!player || player.role !== gapRole || !tradeable(player, other)) continue;
-        const score = (Number(player.rating) || 0) + ((franchise.targets || []).includes(player.role) ? 3 : 0);
-        if (!best || score > best.score) {
-          best = { player, score };
-          bestOwner = other;
-        }
+        if (!player || !roles.includes(player.role) || claimed.has(id)) continue;
+        if (!tradeable(player, other)) continue;
+        list.push({
+          player,
+          owner: other,
+          score: (Number(player.rating) || 0) + ((franchise.targets || []).includes(player.role) ? 3 : 0),
+        });
       }
     }
-    if (!best || !bestOwner) continue;
-    const target = best.player;
+    return list.sort((a, b) => b.score - a.score);
+  };
 
-    // Prefer a player-for-player swap if we hold a surplus the owner wants.
-    const ownerCounts = roleCounts(state, bestOwner);
-    const surplus = (franchise.squad || [])
-      .map((id) => playerOf(state, id))
-      .filter((p) => p && tradeable(p, franchise) && p.id !== target.id)
-      .filter((p) => counts[p.role] > benchmark[p.role] || (bestOwner.targets || []).includes(p.role))
-      .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0))[0];
+  for (const franchise of teams) {
+    if (deals.length >= limit) break;
+    const counts = roleCounts(state, franchise);
+    const gaps = ROLES.filter((role) => counts[role] < benchmark[role]);
+    const priority = [...gaps, ...(franchise.targets || []).filter((role) => !gaps.includes(role))];
+    const roles = priority.length ? priority : ROLES;
 
-    const ownerWantsSurplus = surplus
-      && ((bestOwner.targets || []).includes(surplus.role) || ownerCounts[surplus.role] < benchmark[surplus.role]);
+    let made = false;
+    // Try every candidate, not just the highest-rated one: after a completed
+    // auction purses are often too small for the premium target but sufficient
+    // for a cheaper player at the same role.
+    for (const candidate of candidatesFor(franchise, roles)) {
+      const { player: target, owner } = candidate;
+      const ownerCounts = roleCounts(state, owner);
+      const surplus = (franchise.squad || [])
+        .map((id) => playerOf(state, id))
+        .filter((p) => p && tradeable(p, franchise) && p.id !== target.id)
+        .filter((p) => counts[p.role] > benchmark[p.role] || (owner.targets || []).includes(p.role))
+        .sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0))[0];
+      const ownerWantsSurplus = surplus
+        && ((owner.targets || []).includes(surplus.role) || ownerCounts[surplus.role] < benchmark[surplus.role]);
 
-    if (surplus && ownerWantsSurplus) {
+      if (surplus && ownerWantsSurplus && fundable(franchise, owner, surplus.id, target.id)) {
+        deals.push({
+          fromFranchiseId: franchise.id,
+          toFranchiseId: owner.id,
+          givePlayerIds: [surplus.id],
+          getPlayerIds: [target.id],
+        });
+      } else {
+        const fee = salaryOf(state, target.id);
+        if (Number(franchise.purse) + 1e-9 < fee) continue;
+        deals.push({
+          fromFranchiseId: franchise.id,
+          toFranchiseId: owner.id,
+          givePlayerIds: [],
+          getPlayerIds: [target.id],
+          transferFee: Number(franchise.purse) > fee * 2 ? Math.round(fee * 0.1 * 100) / 100 : 0,
+          playerSharePct: 25,
+        });
+      }
+      claimed.add(target.id);
+      made = true;
+      break;
+    }
+    if (made) continue;
+
+    // Last resort when nobody can fund a cash difference: an equal-salary swap
+    // moves no money, so it needs no purse from either franchise.
+    for (const candidate of candidatesFor(franchise, ROLES)) {
+      const { player: target, owner } = candidate;
+      const give = (franchise.squad || [])
+        .map((id) => playerOf(state, id))
+        .find((p) => p && tradeable(p, franchise) && p.id !== target.id
+          && Math.abs(salaryOf(state, p.id) - salaryOf(state, target.id)) < 1e-9);
+      if (!give) continue;
       deals.push({
         fromFranchiseId: franchise.id,
-        toFranchiseId: bestOwner.id,
-        givePlayerIds: [surplus.id],
+        toFranchiseId: owner.id,
+        givePlayerIds: [give.id],
         getPlayerIds: [target.id],
       });
-    } else {
-      const fee = salaryOf(state, target.id);
-      if (Number(franchise.purse) + 1e-9 < fee) continue; // budget gate
-      deals.push({
-        fromFranchiseId: franchise.id,
-        toFranchiseId: bestOwner.id,
-        givePlayerIds: [],
-        getPlayerIds: [target.id],
-        transferFee: Number(franchise.purse) > fee * 2 ? Math.round(fee * 0.1 * 100) / 100 : 0,
-        playerSharePct: 25,
-      });
+      claimed.add(target.id);
+      break;
     }
   }
   return deals.slice(0, limit);

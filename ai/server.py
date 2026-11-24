@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -20,6 +21,23 @@ try:  # works both as `python ai/server.py` and as `import ai.server`
     from valuation import decide
 except ImportError:  # pragma: no cover - package import path
     from .valuation import decide
+
+
+def load_local_env() -> None:
+    """Load KEY=VALUE pairs from ai/.env without overriding real env vars."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$", line)
+            if not match or os.environ.get(match.group(1)) is not None:
+                continue
+            value = match.group(2).strip().strip('"').strip("'")
+            os.environ[match.group(1)] = value
+
+
+load_local_env()
 
 HOST = "0.0.0.0"
 PORT = 5000

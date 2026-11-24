@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -5,12 +6,32 @@ import { AuctionEngine, computeResults } from './src/engine.js';
 import { createAiClient } from './src/aiClient.js';
 import { createStore } from './src/persistence.js';
 
+// Local .env is a convenience only; real deployment env (Render) always wins.
+function loadLocalEnv() {
+  const file = fileURLToPath(new URL('./.env', import.meta.url));
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!match || process.env[match[1]] !== undefined) continue;
+    const raw = match[2].trim();
+    const quoted = (raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"));
+    process.env[match[1]] = quoted ? raw.slice(1, -1) : raw;
+  }
+}
+loadLocalEnv();
+
 const PORT = Number(process.env.PORT) || 4000;
 const AI_URL = process.env.AI_URL || 'http://localhost:5000';
 const SAVE_FILE = process.env.SAVE_FILE
   ? path.resolve(process.env.SAVE_FILE)
   : fileURLToPath(new URL('./data/auction-state.json', import.meta.url));
 const MAX_BODY = 1024 * 1024;
+// Comma-separated origins, e.g. https://a.example.com,https://b.example.com.
+// Unset means permissive wildcard (legacy/local behaviour).
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((value) => value.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
 // The engine owns format-specific defaults (MEGA uses maxAdditions as a squad cap,
 // MINI uses 6). Only guarantee a usable tick interval here.
 const CONFIG_DEFAULTS = { tickMs: 1000 };
@@ -143,12 +164,27 @@ function readBody(req) {
   });
 }
 
+function applyCors(req, res) {
+  const origin = String(req.headers.origin || '');
+  const headers = {
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-headers': 'Content-Type',
+  };
+  if (!ALLOWED_ORIGINS.length) {
+    headers['access-control-allow-origin'] = '*';
+  } else {
+    headers.vary = 'Origin';
+    if (ALLOWED_ORIGINS.includes(origin)) headers['access-control-allow-origin'] = origin;
+  }
+  for (const [key, value] of Object.entries(headers)) res.setHeader(key, value);
+  return headers;
+}
+
 function send(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(body),
-    'access-control-allow-origin': '*',
     'cache-control': 'no-store',
   });
   res.end(body);
@@ -267,17 +303,11 @@ async function handlePost(req, res) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  res.setHeader('access-control-allow-origin', '*');
-  res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
-  res.setHeader('access-control-allow-headers', 'Content-Type');
+  applyCors(req, res);
 
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET,POST,OPTIONS',
-      'access-control-allow-headers': 'Content-Type',
-      'access-control-max-age': '86400',
-    });
+    res.setHeader('access-control-max-age', '86400');
+    res.writeHead(204);
     res.end();
     return;
   }

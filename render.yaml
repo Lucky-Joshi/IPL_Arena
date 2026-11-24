@@ -34,6 +34,8 @@ services:
         value: https://t20-dynasty-ai.onrender.com
       - key: SAVE_FILE
         value: /var/data/auction-state.json
+      - key: ALLOWED_ORIGINS
+        value: https://t20-dynasty.indevs.in,https://t20-dynasty.vercel.app
       # PORT is injected by Render; backend/server.js already reads it.
     disk:
       name: t20-dynasty-state

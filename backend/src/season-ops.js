@@ -154,7 +154,10 @@ function validateTradeSquads(state, giveIds, getIds, from, to, cashAdjustment, w
   const check = (squad, franchise, purseAfter) => {
     const members = [...squad].map((id) => byId.get(id)).filter(Boolean);
     if (members.length > maxSquad) return `${franchise.name} would exceed the ${maxSquad}-player squad limit`;
-    if (window === 'POST_AUCTION' && members.length < minSquad) {
+    // Only a trade that actually shrinks an undersized squad is prohibited.
+    // A 1-for-1 swap keeps the count and is allowed to rebuild a short squad.
+    const before = (franchise.squad || []).length;
+    if (window === 'POST_AUCTION' && members.length < before && members.length < minSquad) {
       return `${franchise.name} would drop below the ${minSquad}-player minimum squad`;
     }
     const overseas = members.filter(isOverseas);

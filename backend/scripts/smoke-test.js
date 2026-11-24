@@ -762,7 +762,8 @@ async function scenarioAccelerationAndResults() {
 
   // A completed auction opens POST_AUCTION; the same BCCI rules apply over HTTP.
   const scouted = await act({ action: 'RUN_AI_TRADES', limit: 3 });
-  assert.equal(scouted.ok, true, `HTTP RUN_AI_TRADES failed: ${scouted.error}`);
+  const purseDebug = final.franchises.map((f) => `${f.id}=${Number(f.purse).toFixed(2)}`).join(' ');
+  assert.equal(scouted.ok, true, `HTTP RUN_AI_TRADES failed: ${scouted.error} [purses: ${purseDebug}]`);
   const tradedState = scouted.state || await getState();
   assert.ok(tradedState.trades.length > 0, 'rival scouting should file at least one EOI');
   assert.ok(tradedState.trades.some((trade) => trade.window === 'POST_AUCTION'));
@@ -1013,6 +1014,32 @@ async function scenarioSalaryAndSeasonOps() {
   assert.equal(undersized.ok, false, 'post-auction trades require the minimum squad');
   assert.match(undersized.error || '', /minimum squad/i);
   pass('trades: no live-auction EOI / mini signings frozen / minimum squad enforced');
+
+  // A 1-for-1 swap keeps the squad count, so it may rebuild an undersized squad.
+  const domesticTradeable = (teamId, exclude = []) => state.franchises
+    .find((f) => f.id === teamId).squad
+    .map((id) => state.players.find((p) => p.id === id))
+    .find((p) => p && !exclude.includes(p.id) && p.nationality === 'India'
+      && p.availability === 'SOLD' && !p.purchasedInMini && !p.consentWithheld);
+  const swapOut = domesticTradeable('F2');
+  const swapIn = domesticTradeable('F3', swapOut ? [swapOut.id] : []);
+  assert.ok(swapOut && swapIn, 'F2 and F3 need retained domestic players to swap');
+  // F2 is already at the Mini overseas salary ceiling from the lot above; that
+  // is unrelated to squad size, so lift it only while checking this rule.
+  const overseasCapBefore = engine.state.config.overseasSalaryCap;
+  engine.state.config.overseasSalaryCap = 0;
+  let equalCountSwap;
+  try {
+    equalCountSwap = engine.dispatch({
+      type: 'PROPOSE_TRADE', fromFranchiseId: 'F2', toFranchiseId: 'F3',
+      givePlayerIds: [swapOut.id], getPlayerIds: [swapIn.id], source: 'AI', autoRespond: false,
+    });
+  } finally {
+    engine.state.config.overseasSalaryCap = overseasCapBefore;
+  }
+  assert.equal(equalCountSwap.ok, true,
+    `1-for-1 swap should be allowed while undersized: ${equalCountSwap.error}`);
+  pass('trades: equal-count swap allowed while rebuilding an undersized squad');
 
   // --- full four-step protocol in the POST_SEASON window (2026 MINI SETUP)
   const setup = AuctionEngine.create({ season: '2026', format: 'MINI', config: CONFIG, persist: () => {} });

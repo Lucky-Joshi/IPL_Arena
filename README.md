@@ -53,7 +53,8 @@ never deadlocks.
 
 The frontend is on Vercel; the backend and AI are Render web services. See [DEPLOYMENT.md](DEPLOYMENT.md)
 for the full Vercel + Render guide, `render.yaml` blueprint, env-var reference and verification checklist.
-Template env files live at `frontend/.env.example`, `backend/.env.example` and `ai/.env.example`.
+Blank env templates live at `frontend/.env.example`, `backend/.env.example` and `ai/.env.example`;
+real local values belong in the gitignored `frontend/.env.local`, `backend/.env` and `ai/.env`.
 
 ## Season cycle (BCCI 2025–2027)
 

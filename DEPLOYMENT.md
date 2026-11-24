@@ -8,8 +8,9 @@ T20 Dynasty runs as three independent services:
 | Backend (authoritative Node engine) | `backend/` | **Render** Web Service | `https://t20-dynasty-backend.onrender.com` |
 | AI (stateless Python valuation) | `ai/` | **Render** Web Service | `https://t20-dynasty-ai.onrender.com` |
 
-The browser talks **only** to the backend; the backend talks to the AI. Both Render services send permissive
-CORS headers, so the Vercel origin is accepted without extra configuration.
+The browser talks **only** to the backend; the backend talks to the AI. The backend uses an explicit CORS
+allowlist (`ALLOWED_ORIGINS`) so only your frontend domains can call it. The AI is server-side only and keeps
+its permissive CORS headers.
 
 > Replace the `onrender.com` hostnames below if you choose different Render service names. The names above
 > are what `render.yaml` creates.
@@ -99,10 +100,12 @@ instance restart wipes it. For durable saves you need a **paid web service with 
    |---|---|---|
    | `AI_URL` | `https://t20-dynasty-ai.onrender.com` | Backend → AI base URL, no trailing slash. |
    | `SAVE_FILE` | `/var/data/auction-state.json` | Must be inside the mounted disk. |
+   | `ALLOWED_ORIGINS` | `https://t20-dynasty.indevs.in,https://t20-dynasty.vercel.app` | Comma-separated, no trailing slashes. Requests from other origins get no CORS header. |
    | `PORT` | _leave unset_ | Render injects it; backend already reads `process.env.PORT`. |
 
-   > The backend does **not** load `.env` files. Real values live in the Render Dashboard. The
-   > `backend/.env.example` file is documentation only.
+   > On Render, real values live in the dashboard — never commit them. The committed `.env.example` files are
+   > blank templates only. For local runs, the services read a gitignored `.env` (`frontend/.env.local` for
+   > Next.js); real environment variables always take precedence over those files.
 
 5. Create the service. A service with a disk runs **one instance** and deploys with a brief stop/start.
 
@@ -151,17 +154,18 @@ inlined at build time**, so changing the value requires a new deploy.
 
 ## 4. Environment variable reference
 
-| File | Variable | Local default | Render / Vercel value | Loaded automatically? |
-|---|---|---|---|---|
-| `frontend/.env.example` | `NEXT_PUBLIC_API_URL` | `http://localhost:4000` | `https://t20-dynasty-backend.onrender.com` | Only Vercel dashboard / `.env.local`; inlined at build |
-| `backend/.env.example` | `PORT` | `4000` | injected by Render | Render injects; Node does not read `.env` |
-| `backend/.env.example` | `AI_URL` | `http://localhost:5000` | `https://t20-dynasty-ai.onrender.com` | Render dashboard only |
-| `backend/.env.example` | `SAVE_FILE` | `./data/auction-state.json` | `/var/data/auction-state.json` | Render dashboard only |
-| `ai/.env.example` | `PORT` | `5000` | injected by Render | Render injects; Python does not read `.env` |
-| `ai/.env.example` | `AI_PORT` | — | leave unset | legacy local fallback only |
+| Variable | Local value (gitignored) | Render / Vercel value | Notes |
+|---|---|---|---|
+| `NEXT_PUBLIC_API_URL` | `frontend/.env.local` → `http://localhost:4000` | `https://t20-dynasty-backend.onrender.com` | Next.js loads `.env.local`; inlined at build time on Vercel |
+| `PORT` | `backend/.env` → `4000`, `ai/.env` → `5000` | injected by Render | Real env always wins over `.env`; AI prefers `PORT` over `AI_PORT` |
+| `AI_URL` | `backend/.env` → `http://localhost:5000` | `https://t20-dynasty-ai.onrender.com` | No trailing slash |
+| `SAVE_FILE` | `backend/.env` → `data/auction-state.json` | `/var/data/auction-state.json` | Must be on the persistent disk in production |
+| `ALLOWED_ORIGINS` | `backend/.env` → localhost + both Vercel domains | `https://t20-dynasty.indevs.in,https://t20-dynasty.vercel.app` | Comma-separated; unset = permissive `*` |
 
-`.env.example` files are committed templates. Real `.env`, `.env.local` and `.env.*` files are ignored by
-Git via `.gitignore`.
+The committed `.env.example` files contain **blank placeholders only** — no values, no secrets. The real local
+values live in `frontend/.env.local`, `backend/.env` and `ai/.env`, all ignored by Git. Render and Vercel
+values are set in their dashboards. Backend and AI load their gitignored `.env` on startup for convenience;
+any variable already present in the real environment takes precedence.
 
 ---
 
@@ -170,6 +174,7 @@ Git via `.gitignore`.
 - [ ] `https://t20-dynasty-ai.onrender.com/health` → `{ ok: true, ... }`
 - [ ] `https://t20-dynasty-backend.onrender.com/api/health` → `{ ok: true, ai: { ok: true }, ... }`
 - [ ] Vercel redeploy completed **after** setting `NEXT_PUBLIC_API_URL`
+- [ ] Backend `ALLOWED_ORIGINS` includes both frontend domains (comma-separated, no trailing slash)
 - [ ] `https://t20-dynasty.indevs.in/` loads and can create an auction
 - [ ] Create auction, place a bid, reload page → state survives (persistent disk working)
 - [ ] Backend logs show no `ECONNREFUSED` against the AI URL
@@ -183,12 +188,13 @@ Git via `.gitignore`.
 - **Cold starts:** both Render services may sleep on free plans. The first request after idle is slow; warm
   both URLs before a live auction. The backend falls back to a local heuristic if the AI is briefly down,
   so bidding never deadlocks.
-- **CORS:** backend and AI both return `Access-Control-Allow-Origin: *`. The AI is only called server-side
-  by the backend.
+- **CORS:** the backend echoes only origins listed in `ALLOWED_ORIGINS` and adds `Vary: Origin`; other origins
+  receive no `Access-Control-Allow-Origin` header. If the variable is unset, it falls back to `*` for local
+  development. The AI keeps permissive CORS because only the backend calls it.
 - **Security:** no secrets are required by the app today. If you later add an admin token, store it only in
-  the platform dashboards, never in `render.yaml` or the repo.
-- **Local development:** copy the templates to `.env.local` (frontend) or export them in your shell
-  (backend/AI), then run `cmd /c run-all.cmd`. The defaults in the templates target localhost.
+  the platform dashboards or a gitignored `.env`, never in `render.yaml` or a committed `.env.example`.
+- **Local development:** the gitignored `.env` files already contain localhost values. Run `cmd /c run-all.cmd`;
+  real environment variables override anything in those files.
 
 ---
 
@@ -198,6 +204,7 @@ Git via `.gitignore`.
 |---|---|
 | Frontend says "Cannot reach the auction server at http://localhost:4000" | `NEXT_PUBLIC_API_URL` was not set on Vercel, or the deploy happened before the change. Set it and redeploy. |
 | Backend health `ai.ok: false` | AI sleeping, wrong `AI_URL`, or AI bound to `127.0.0.1` instead of `0.0.0.0`. The patched `server.py` binds `0.0.0.0` and reads `PORT`. |
+| Browser blocks requests with a CORS error | Frontend origin missing from `ALLOWED_ORIGINS`. Add the exact origin (scheme + host + port, no trailing slash) and redeploy the backend. |
 | State resets after redeploy | No persistent disk, or `SAVE_FILE` points outside `/var/data`. Attach a disk on a paid plan and set `SAVE_FILE=/var/data/auction-state.json`. |
 | Render build fails for AI | Make sure **Root Directory** is `ai` and the build command does not run `pip install -r requirements.txt` (there is no requirements file; zero dependencies). |
 | Backend fails to boot | Root Directory must be `backend`, start command `npm start`, and Render must inject `PORT`. |
