@@ -463,6 +463,14 @@ export default function TradeDesk({ state, onAction, busy }) {
         )}
       </section>
 
+      {windowInfo.open && windowInfo.window === 'POST_SEASON' && (
+        <div className="notice notice-gold">
+          <strong>Step 1 of 2 — trade before retentions.</strong> Contracts you move now belong to the new franchise
+          when retentions are chosen.{' '}
+          <Link className="inline-link" href="/">Continue to retentions →</Link>
+        </div>
+      )}
+
       <section className="panel claw-registry">
         <div className="panel-heading">
           <h3>Franchise Clawback (RTM)</h3>

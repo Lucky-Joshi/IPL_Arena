@@ -124,9 +124,10 @@ authoritative phase — a caller-supplied `window` is ignored. The EOI form stay
 an open window, so it is clear when trading opens again. Open it directly at `/auction?tab=trades` from the top
 navigation, the setup resume panel or the retention modal; the tab shows an **OPEN** badge whenever a window is live.
 
-- **Post-season** (`POST_SEASON`): `SETUP` in **every** season, before retentions are finalized. Each franchise
-  trades its distinct previous-season contracts; un-retained players stay available for the auction. Clawback
-  eligibility follows the contract to its new owner.
+- **Post-season** (`POST_SEASON`): `SETUP` in **every** season, before retentions are finalized. Creating an auction
+  opens the **trade-first** step; the Trade Desk carries a `Continue to retentions →` link when you are done, and
+  trading can be skipped. Each franchise trades its distinct previous-season contracts; un-retained players stay
+  available for the auction. Clawback eligibility follows the contract to its new owner.
 - **Post-auction** (`POST_AUCTION`): `FINAL_REVIEW`/`COMPLETED`, closing 30 days before the tournament.
   Players bought at the mini auction are frozen until they have played a season.
 

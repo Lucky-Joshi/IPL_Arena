@@ -82,7 +82,7 @@ export default function SetupScreen() {
   const [created, setCreated] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [retentionStep, setRetentionStep] = useState('pick');
+  const [retentionStep, setRetentionStep] = useState('trade');
   const [selectedRetentionIds, setSelectedRetentionIds] = useState([]);
   const [retentionRole, setRetentionRole] = useState('ALL');
   const [retentionFeedback, setRetentionFeedback] = useState('');
@@ -105,7 +105,7 @@ export default function SetupScreen() {
           const mine = savedState.franchises?.find((entry) => entry.id === savedState.userFranchiseId);
           const retained = (mine?.retentions || []).map((entry) => entry.playerId);
           setSelectedRetentionIds(retained);
-          setRetentionStep(retained.length ? 'review' : 'pick');
+          setRetentionStep(retained.length ? 'review' : 'trade');
         }
       })
       .catch(() => {
@@ -174,7 +174,7 @@ export default function SetupScreen() {
       });
       if (action === 'CREATE') {
         setCreated(result.state);
-        setRetentionStep('pick');
+        setRetentionStep('trade');
         setSelectedRetentionIds([]);
         setRetentionRole('ALL');
         setRetentionFeedback('');
@@ -502,14 +502,33 @@ export default function SetupScreen() {
             <div className="modal-header">
               <div>
                 <span className="eyebrow">AUCTION CREATED · PHASE: SETUP</span>
-                <h2>{retentionStep === 'pick' ? 'Choose your retentions' : 'Retentions locked in'}</h2>
+                <h2>
+                  {retentionStep === 'trade'
+                    ? 'Trade before you retain'
+                    : retentionStep === 'pick'
+                      ? 'Choose your retentions'
+                      : 'Retentions locked in'}
+                </h2>
               </div>
               <button type="button" className="modal-close" onClick={() => setCreated(null)} aria-label="Close preview">
                 ×
               </button>
             </div>
 
-            {retentionStep === 'pick' ? (
+            {retentionStep === 'trade' ? (
+              <div className="modal-body">
+                <p className="modal-lead">
+                  <strong>Step 1 — the post-season trading window is open.</strong> Reshape the previous-season
+                  contract lists before you retain anyone. Deals filed now move contracts to their new owner, and
+                  your retention picker refreshes as soon as you return.
+                </p>
+                <p className="balance-note">
+                  Your franchise: <strong>{createdMine?.name || '—'}</strong> ·{' '}
+                  <strong>{createdMine?.previousSquad?.length || 0}</strong> previous-season contracts
+                  {isMegaAuction && <> · unused retention slots become Clawback cards</>}.
+                </p>
+              </div>
+            ) : retentionStep === 'pick' ? (
               <div className="modal-body">
                 <p className="modal-lead">
                   <strong>{createdMine?.name || 'Your franchise'}</strong> can only retain players from its
@@ -525,8 +544,8 @@ export default function SetupScreen() {
                   )}
                 </p>
                 <p className="balance-note">
-                  Want to reshape the contract list first? <a href="/auction?tab=trades">Open the Trade Desk →</a> deals
-                  made here appear in this picker as soon as you return.
+                  Need one more deal before you lock this in? <a href="/auction?tab=trades">Open the Trade Desk →</a>{' '}
+                  approved moves appear in this picker as soon as you return.
                 </p>
 
                 <div className="retention-meter">
@@ -640,10 +659,17 @@ export default function SetupScreen() {
 
             {error && <div className="inline-error modal-error">{error}</div>}
             <div className="modal-actions">
-              {retentionStep === 'pick' ? (
+              {retentionStep === 'trade' ? (
                 <>
-                  <button type="button" className="btn btn-ghost" onClick={() => setCreated(null)}>
-                    Keep in setup
+                  <button type="button" className="btn btn-ghost" onClick={() => setRetentionStep('pick')}>
+                    Skip trading →
+                  </button>
+                  <a className="btn btn-primary" href="/auction?tab=trades">Open Trade Desk →</a>
+                </>
+              ) : retentionStep === 'pick' ? (
+                <>
+                  <button type="button" className="btn btn-ghost" onClick={() => setRetentionStep('trade')}>
+                    Back to trading
                   </button>
                   <button type="button" className="btn btn-primary" onClick={handleConfirmRetentions} disabled={busy}>
                     {busy
