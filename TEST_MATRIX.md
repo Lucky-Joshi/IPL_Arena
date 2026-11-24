@@ -64,6 +64,7 @@ tests, backend end-to-end smoke tests, Next.js production build.
 | 56 | Results report caps, welfare, CLAW, trades, injuries | smoke-test — `source:'TRADED'`, enriched trade rows, `tradedInCount`/`tradedOutCount`, `lcbTradeRevenue`, `tamperingCases`; `ai/test_ai.py` (18 tests) |
 | 57 | Money totals reconcile at two decimals | smoke-test `totalSpent === totalAuctionSpending`, `purseSpent = retentionSpent + auctionSpent − tradeCashDelta` |
 | 58 | Retention/season/Trade Desk UI reflects LCB rules | frontend `SetupScreen`, `BidPanel`, `TradeDesk`, `SquadManager`, `ResultsView`; production build |
+| 59 | Clawback/X-Factor readouts and RPP controls are visible | `BidPanel` command desk, `TradeDesk` RPP panel; smoke-test injury/replacement/withdrawal actions; production build |
 
 Edge cases: low purse, squad cap, overseas cap, no interested franchise, all AI withdrawn, human leading,
 human withdrawing, break during active lot, reload during bidding war — covered by validation checks, the
@@ -103,3 +104,7 @@ persistence/break scenarios and smoke invariants.
 16. Log a tampering report and rule on it in the integrity unit; confirm a fine/ban is reflected in the final
     report. Deadline lapsing is deterministic in the automated suite — the browser pass only verifies that
     the real 48h/72h deadlines are displayed.
+17. In the RPP panel, report a certified injury on one of your contracted players, sign an available player
+    within the budget and confirm no purse debit. Verify an uncertified withdrawal bans the player for two
+    seasons. In the command desk, confirm the Clawback card count in Mega (and "Mini · not available" in Mini)
+    and the X-Factor paid-places readout.

@@ -43,6 +43,10 @@ export default function BidPanel({ state, player, onAction, busy }) {
   const overseasFull = isOverseas(player) && overseasCount(state, me) >= (Number(state.config?.maxOverseas) || 0);
   const canAfford = (Number(me.purse) || 0) >= amount + reserve;
   const nominated = Boolean(player && state.nominations?.includes(player.id));
+  const clawAvailable = Boolean(state.rules?.clawAvailable);
+  const clawCards = Number(me.clawCards) || 0;
+  const xFactorCount = Number(state.rules?.xFactor) || 0;
+  const paidPlaces = (Number(state.rules?.playingXi) || 11) + xFactorCount;
 
   let bidBlock = '';
   if (CLAW_PHASES.includes(state.phase)) {
@@ -103,6 +107,14 @@ export default function BidPanel({ state, player, onAction, busy }) {
         <div><span>SLOTS LEFT</span><strong>{slotsLeft}</strong></div>
         <div><span>RESERVE</span><strong>{cr(reserve)}</strong></div>
         <div><span>STATUS</span><strong className={`status-${String(me.biddingStatus || 'IDLE').toLowerCase()}`}>{me.biddingStatus || 'IDLE'}</strong></div>
+        <div>
+          <span>CLAWBACK</span>
+          <strong>{clawAvailable ? `${clawCards} card${clawCards === 1 ? '' : 's'} left` : 'Mini · not available'}</strong>
+        </div>
+        <div>
+          <span>X-FACTOR SUBSTITUTE</span>
+          <strong>{xFactorCount ? `${paidPlaces} paid XI places` : 'Inactive'}</strong>
+        </div>
       </div>
 
       {state.claw && CLAW_PHASES.includes(state.phase) && (

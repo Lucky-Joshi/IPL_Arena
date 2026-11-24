@@ -654,6 +654,7 @@ async function scenarioMiniAuction() {
   });
   assert.equal(created.ok, true, `MINI CREATE failed: ${created.error}`);
   assert.equal(created.state.season, '2026');
+  assert.equal(created.state.format, 'MINI');
   assert.equal(created.state.config.startingPurse, 125);
   assert.equal(created.state.config.totalSalaryCap, 151);
   assert.equal(created.state.config.overseasSalaryCap, 18);
@@ -1388,7 +1389,8 @@ function scenarioLegacyFictionNames() {
     rtm: { playerId: 'P1' },
     rtmLog: [],
     bcciTradeRevenue: 2,
-    rules: { rtmAvailable: true, impactPlayer: 1 },
+    rules: { rtmAvailable: true, impactPlayer: 1, auctionNote: 'Mega auction · 6 retentions/RTMs · Impact Player' },
+    announcement: { text: 'BCCI review of the RTM offer' },
     players: [{ id: 'P1', isRappReplacement: true }],
     franchises: [{ id: 'F1', rtmCards: 3, rtmUsed: 1 }],
     trades: [{ id: 't1', status: 'BCCI_REVIEW', approval: 'BCCI_REVIEW', transferFee: { bcciCut: 1 }, timeline: [] }],
@@ -1401,6 +1403,8 @@ function scenarioLegacyFictionNames() {
   assert.equal(legacy.lcbTradeRevenue, 2);
   assert.equal(legacy.rules.clawAvailable, true);
   assert.equal(legacy.rules.xFactor, 1);
+  assert.equal(legacy.rules.auctionNote, 'Mega auction · 6 retentions/CLAWs · X-Factor Substitute');
+  assert.equal(legacy.announcement.text, 'LCB review of the CLAW offer');
   assert.equal(legacy.players[0].isRppReplacement, true);
   assert.equal(legacy.franchises[0].clawCards, 3);
   assert.equal(legacy.franchises[0].clawUsed, 1);
@@ -1413,6 +1417,14 @@ function scenarioLegacyFictionNames() {
   pass('legacy identifiers migrate to fictional LCB/Clawback/RPP names');
 }
 
+function scenarioSeasonFormatNormalisation() {
+  const mixed = AuctionEngine.create({ season: '2026', format: 'MEGA' }).getState();
+  assert.equal(mixed.season, '2026');
+  assert.equal(mixed.format, 'MINI', 'season registry must override a stale format');
+  assert.equal(mixed.rules.format, 'MINI');
+  pass('season registry normalises stale mixed season/format state');
+}
+
 async function main() {
   // Sanity-check the other agents' modules before starting processes.
   assert.equal(generatePlayers().length >= 140, true, 'generatePlayers() should create >=140 players');
@@ -1420,6 +1432,7 @@ async function main() {
   assert.equal(typeof computeResults, 'function');
   try {
     scenarioLegacyFictionNames();
+    scenarioSeasonFormatNormalisation();
     await scenarioPacingAndEarlyBid();
     await scenarioRetentions();
     await scenarioClawFlow();

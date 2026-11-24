@@ -39,6 +39,14 @@ export function migrateLegacyNames(state) {
   const approvalAliases = {
     BCCI_REVIEW: 'LCB_REVIEW', BCCI_APPROVED: 'LCB_APPROVED', BCCI_REJECTED: 'LCB_REJECTED',
   };
+  const renameText = (value) => typeof value === 'string'
+    ? value
+      .replace(/BCCI/g, 'LCB')
+      .replace(/Right to Match/g, 'Franchise Clawback')
+      .replace(/RTM/g, 'CLAW')
+      .replace(/RAPP/g, 'RPP')
+      .replace(/Impact Player/g, 'X-Factor Substitute')
+    : value;
 
   if (phaseAliases[state.phase]) state.phase = phaseAliases[state.phase];
   if (state.claw === undefined && state.rtm !== undefined) state.claw = state.rtm;
@@ -59,7 +67,9 @@ export function migrateLegacyNames(state) {
     }
     delete state.rules.rtmAvailable;
     delete state.rules.impactPlayer;
+    state.rules.auctionNote = renameText(state.rules.auctionNote);
   }
+  if (state.announcement) state.announcement.text = renameText(state.announcement.text);
 
   for (const player of state.players || []) {
     if (player.isRppReplacement === undefined && player.isRappReplacement !== undefined) {
@@ -98,7 +108,13 @@ export function migrateLegacyNames(state) {
     if (event.type === 'RTM') event.type = 'CLAW';
     if (event.type === 'RAPP') event.type = 'RPP';
   };
-  for (const event of state.eventLog || []) renameEvent(event);
+  for (const event of state.eventLog || []) {
+    renameEvent(event);
+    if (event) event.message = renameText(event.message);
+  }
+  for (const entry of state.conversations || []) {
+    if (entry) entry.text = renameText(entry.text);
+  }
   for (const entry of state.bidHistory || []) {
     if (typeof entry?.source === 'string' && entry.source.startsWith('RTM')) {
       entry.source = `CLAW${entry.source.slice(3)}`;

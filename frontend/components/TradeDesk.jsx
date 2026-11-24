@@ -30,7 +30,7 @@ function statusTone(status) {
 }
 
 /** Chip-based picker over one franchise's tradeable squad members. */
-function PlayerPicker({ state, franchise, window, selected, onChange, excludeIds = [], label }) {
+function PlayerPicker({ state, franchise, window, selected, onChange, excludeIds = [], label, disabled = false }) {
   const options = (franchise?.squad || [])
     .map((id) => playerById(state, id))
     .filter((player) => player
@@ -46,7 +46,7 @@ function PlayerPicker({ state, franchise, window, selected, onChange, excludeIds
           return (
             <span key={id} className="trade-chip">
               {player?.name || id} · {cr(tradeSalary(state, id))}
-              <button type="button" aria-label={`Remove ${player?.name || id}`} onClick={() => onChange(selected.filter((x) => x !== id))}>×</button>
+              <button type="button" disabled={disabled} aria-label={`Remove ${player?.name || id}`} onClick={() => onChange(selected.filter((x) => x !== id))}>×</button>
             </span>
           );
         })}
@@ -54,6 +54,7 @@ function PlayerPicker({ state, franchise, window, selected, onChange, excludeIds
       </div>
       <select
         value=""
+        disabled={disabled}
         onChange={(event) => {
           if (event.target.value) onChange([...selected, event.target.value]);
         }}
@@ -83,6 +84,117 @@ function DealSummary({ state, giveIds, getIds, fromName, toName }) {
         <span>Equal salaries — no cash moves between the purses.</span>
       )}
     </div>
+  );
+}
+
+/** Injury replacements and withdrawals are backed by the existing LCB actions. */
+function RppPanel({ state, mine, onAction, busy }) {
+  const [withdrawId, setWithdrawId] = useState('');
+  const [injuredId, setInjuredId] = useState('');
+  const [replacementId, setReplacementId] = useState('');
+  const [fee, setFee] = useState('');
+
+  if (!mine) return null;
+
+  const squad = (mine.squad || []).map((id) => playerById(state, id)).filter(Boolean);
+  const activePlayers = squad.filter((player) => !player.injured && !player.withdrawn
+    && player.availability !== 'INJURED' && player.availability !== 'WITHDRAWN');
+  const injuredPlayers = squad.filter((player) => player.injured || player.availability === 'INJURED');
+  const rppPlayers = (state.players || []).filter((player) => ['AVAILABLE', 'UNSOLD'].includes(player.availability)
+    && !player.soldTo && !player.injured && !player.withdrawn);
+  const injured = playerById(state, injuredId);
+  const budget = Number(injured?.injuryReplacementBudget) || 0;
+  const signed = (state.players || []).filter((player) => player.isRppReplacement && player.soldTo === mine.id);
+
+  const act = (action, payload) => onAction(action, { franchiseId: mine.id, ...payload });
+  const options = (players) => players.map((player) => (
+    <option key={player.id} value={player.id}>
+      {player.name} · {roleLabel(player.role)} · {cr(tradeSalary(state, player.id))}
+    </option>
+  ));
+
+  return (
+    <section className="panel">
+      <div className="panel-heading">
+        <h3>Reserve Player Pool &amp; withdrawals</h3>
+        <span className="panel-tag">RPP</span>
+      </div>
+      <p className="balance-note">
+        A certified injury lets you sign a replacement from the RPP within the outgoing salary, with no purse debit.
+        An uncertified pre-season withdrawal removes the player and applies a two-season ban.
+      </p>
+      <div className="trade-form">
+        <div className="trade-fee-fields">
+          <label>
+            Contracted player
+            <select value={withdrawId} disabled={busy} onChange={(event) => setWithdrawId(event.target.value)}>
+              <option value="">Select…</option>
+              {options(activePlayers)}
+            </select>
+          </label>
+        </div>
+        <div className="trade-actions">
+          <button type="button" className="btn btn-ghost" disabled={busy || !withdrawId}
+            onClick={() => act('INJURE_PLAYER', { playerId: withdrawId })}>
+            Report certified injury
+          </button>
+          <button type="button" className="btn btn-ghost" disabled={busy || !withdrawId}
+            onClick={() => act('PLAYER_WITHDRAW', { playerId: withdrawId })}>
+            Uncertified withdrawal · 2-season ban
+          </button>
+        </div>
+        <div className="trade-fee-fields">
+          <label>
+            Injured player
+            <select value={injuredId} disabled={busy || !injuredPlayers.length}
+              onChange={(event) => { setInjuredId(event.target.value); setReplacementId(''); setFee(''); }}>
+              <option value="">Select…</option>
+              {options(injuredPlayers)}
+            </select>
+          </label>
+          <label>
+            RPP replacement
+            <select value={replacementId} disabled={busy || !injured || !rppPlayers.length}
+              onChange={(event) => setReplacementId(event.target.value)}>
+              <option value="">Select…</option>
+              {options(rppPlayers)}
+            </select>
+          </label>
+          <label>
+            Fee (Cr){budget > 0 ? ` · max ${cr(budget)}` : ''}
+            <input type="number" min="0" max={budget || undefined} step="0.05" value={fee}
+              placeholder={budget > 0 ? String(budget) : '—'} disabled={busy || !injured || !replacementId}
+              onChange={(event) => setFee(event.target.value)} />
+          </label>
+        </div>
+        <div className="trade-actions">
+          <button type="button" className="btn btn-primary" disabled={busy || !injured || !replacementId}
+            onClick={() => act('SIGN_INJURY_REPLACEMENT', {
+              injuredPlayerId: injuredId,
+              replacementPlayerId: replacementId,
+              ...(fee === '' ? {} : { fee: Number(fee) }),
+            })}>
+            Sign RPP replacement
+          </button>
+        </div>
+      </div>
+      {signed.length > 0 && (
+        <div className="trade-list">
+          {signed.map((player) => (
+            <div key={player.id} className="trade-card">
+              <div className="trade-card-head">
+                <span className="trade-id">RPP</span>
+                <span className="source-badge">SIGNED</span>
+              </div>
+              <p className="trade-route">
+                <strong>{player.name}</strong> joined for {cr(Number(player.salary) || Number(player.soldPrice) || 0)}
+                <small> · no purse debit</small>
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -301,6 +413,7 @@ export default function TradeDesk({ state, onAction, busy }) {
     mode === 'BUY' ? getIds : mode === 'SELL' ? [] : getIds);
   const canSubmit = windowInfo.open && (giveIds.length > 0 || getIds.length > 0)
     && (mode !== 'SWAP' || (giveIds.length > 0 && getIds.length > 0));
+  const formDisabled = busy || !windowInfo.open;
 
   const submitProposal = () => {
     const payload = {
@@ -342,64 +455,71 @@ export default function TradeDesk({ state, onAction, busy }) {
         )}
       </section>
 
-      {windowInfo.open && (
-        <section className="panel">
-          <div className="panel-heading"><h3>File an Expression of Interest</h3><span className="panel-tag">STEP 1 · EOI</span></div>
-          <div className="trade-form">
-            <label className="squad-select">
-              <span>Counterparty</span>
-              <select value={counterparty?.id || ''} onChange={(event) => setCounterpartyId(event.target.value)}>
-                {rivals.map((franchise) => (
-                  <option key={franchise.id} value={franchise.id}>{franchise.name} ({franchise.short})</option>
-                ))}
-              </select>
-            </label>
-            <div className="filter-buttons">
-              {MODES.map((option) => (
-                <button key={option.id} type="button"
-                  className={`filter-chip ${mode === option.id ? 'is-active' : ''}`}
-                  aria-pressed={mode === option.id}
-                  onClick={() => { setMode(option.id); setGiveIds([]); setGetIds([]); }}>
-                  {option.label}
-                </button>
+      <section className={`panel ${windowInfo.open ? '' : 'is-closed'}`}>
+        <div className="panel-heading">
+          <h3>File an Expression of Interest</h3>
+          <span className="panel-tag">{windowInfo.open ? 'STEP 1 · EOI' : 'CLOSED'}</span>
+        </div>
+        {!windowInfo.open && (
+          <p className="balance-note">
+            This form is shown for reference. It opens in a Mini post-season window (before START) or after the auction completes.
+          </p>
+        )}
+        <div className="trade-form">
+          <label className="squad-select">
+            <span>Counterparty</span>
+            <select value={counterparty?.id || ''} disabled={formDisabled} onChange={(event) => setCounterpartyId(event.target.value)}>
+              {rivals.map((franchise) => (
+                <option key={franchise.id} value={franchise.id}>{franchise.name} ({franchise.short})</option>
               ))}
-            </div>
-            {mode !== 'BUY' && (
-              <PlayerPicker state={state} franchise={mine} window={window} label="You send"
-                selected={giveIds} onChange={setGiveIds} excludeIds={getIds} />
-            )}
-            {mode !== 'SELL' && (
-              <PlayerPicker state={state} franchise={counterparty} window={window} label={`${counterparty?.short || 'They'} send`}
-                selected={getIds} onChange={setGetIds} excludeIds={giveIds} />
-            )}
-            <DealSummary state={state}
-              giveIds={mode === 'BUY' ? [] : giveIds}
-              getIds={mode === 'SELL' ? [] : getIds}
-              fromName={mine?.name} toName={counterparty?.name} />
-            {deal.type === 'ALL_CASH' && (giveIds.length > 0 || getIds.length > 0) && (
-              <div className="trade-fee-fields">
-                <label>
-                  Optional transfer fee (Cr, off-purse)
-                  <input type="number" min="0" step="0.05" value={transferFee} onChange={(event) => setTransferFee(event.target.value)} />
-                </label>
-                <label>
-                  Player share of remainder (%, max 50)
-                  <input type="number" min="0" max="50" step="5" value={playerSharePct} onChange={(event) => setPlayerSharePct(event.target.value)} />
-                </label>
-                <small>The League Control Board takes 50% of any transfer fee; the player(s) may take up to half of the rest; the selling franchise keeps the balance. No purse is touched.</small>
-              </div>
-            )}
-            <div className="trade-actions">
-              <button type="button" className="btn btn-primary" disabled={busy || !canSubmit} onClick={submitProposal}>
-                Submit EOI to the League Control Board
+            </select>
+          </label>
+          <div className="filter-buttons">
+            {MODES.map((option) => (
+              <button key={option.id} type="button"
+                className={`filter-chip ${mode === option.id ? 'is-active' : ''}`}
+                aria-pressed={mode === option.id}
+                disabled={formDisabled}
+                onClick={() => { setMode(option.id); setGiveIds([]); setGetIds([]); }}>
+                {option.label}
               </button>
-              <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => onAction('RUN_AI_TRADES', { limit: 3 })}>
-                Scout rival trade activity
-              </button>
-            </div>
+            ))}
           </div>
-        </section>
-      )}
+          {mode !== 'BUY' && (
+            <PlayerPicker state={state} franchise={mine} window={window} label="You send"
+              selected={giveIds} onChange={setGiveIds} excludeIds={getIds} disabled={formDisabled} />
+          )}
+          {mode !== 'SELL' && (
+            <PlayerPicker state={state} franchise={counterparty} window={window} label={`${counterparty?.short || 'They'} send`}
+              selected={getIds} onChange={setGetIds} excludeIds={giveIds} disabled={formDisabled} />
+          )}
+          <DealSummary state={state}
+            giveIds={mode === 'BUY' ? [] : giveIds}
+            getIds={mode === 'SELL' ? [] : getIds}
+            fromName={mine?.name} toName={counterparty?.name} />
+          {deal.type === 'ALL_CASH' && (giveIds.length > 0 || getIds.length > 0) && (
+            <div className="trade-fee-fields">
+              <label>
+                Optional transfer fee (Cr, off-purse)
+                <input type="number" min="0" step="0.05" value={transferFee} disabled={formDisabled} onChange={(event) => setTransferFee(event.target.value)} />
+              </label>
+              <label>
+                Player share of remainder (%, max 50)
+                <input type="number" min="0" max="50" step="5" value={playerSharePct} disabled={formDisabled} onChange={(event) => setPlayerSharePct(event.target.value)} />
+              </label>
+              <small>The League Control Board takes 50% of any transfer fee; the player(s) may take up to half of the rest; the selling franchise keeps the balance. No purse is touched.</small>
+            </div>
+          )}
+          <div className="trade-actions">
+            <button type="button" className="btn btn-primary" disabled={busy || !canSubmit} onClick={submitProposal}>
+              Submit EOI to the League Control Board
+            </button>
+            <button type="button" className="btn btn-ghost" disabled={formDisabled} onClick={() => onAction('RUN_AI_TRADES', { limit: 3 })}>
+              Scout rival trade activity
+            </button>
+          </div>
+        </div>
+      </section>
 
       <section className="panel">
         <div className="panel-heading">
@@ -429,6 +549,8 @@ export default function TradeDesk({ state, onAction, busy }) {
           )}
         </div>
       </section>
+
+      <RppPanel state={state} mine={mine} onAction={onAction} busy={busy} />
 
       <section className="panel">
         <div className="panel-heading"><h3>Integrity unit</h3><span className="panel-tag">ANTI-TAMPERING</span></div>

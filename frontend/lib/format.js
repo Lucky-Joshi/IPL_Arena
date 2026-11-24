@@ -222,11 +222,18 @@ export function tradeApprovalLabel(approval) {
 /**
  * Mirrors backend activeTradeWindow(): the open window is derived from the
  * season phase, never from a client-supplied value. No trades before a Mega
- * Auction; the live auction floor is always closed to trading.
+ * Auction; the live auction floor is always closed to trading. The season is
+ * authoritative, so a stale `format` in an old save cannot disagree with it.
  */
+function auctionFormat(state) {
+  const fromRules = String(state?.rules?.format || '').toUpperCase();
+  if (fromRules === 'MEGA' || fromRules === 'MINI') return fromRules;
+  return seasonOption(state).format;
+}
+
 export function activeTradeWindow(state) {
   if (!state) return null;
-  if (state.phase === 'SETUP') return state.format === 'MEGA' ? null : 'POST_SEASON';
+  if (state.phase === 'SETUP') return auctionFormat(state) === 'MEGA' ? null : 'POST_SEASON';
   if (state.phase === 'COMPLETED' || state.phase === 'FINAL_REVIEW') return 'POST_AUCTION';
   return null;
 }
@@ -249,7 +256,7 @@ export function tradeWindowInfo(state) {
       detail: 'Closes 30 days before the tournament. Mini-auction signings are frozen until they have played a season.',
     };
   }
-  if (state?.phase === 'SETUP' && state?.format === 'MEGA') {
+  if (state?.phase === 'SETUP' && auctionFormat(state) === 'MEGA') {
     return {
       open: false,
       window: null,

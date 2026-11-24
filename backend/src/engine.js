@@ -987,6 +987,9 @@ export class AuctionEngine {
     const state = this.state;
     migrateLegacyNames(state);
     state.season = resolveSeason(state.season, state.format);
+    // The season registry is authoritative; never let a stale save keep a
+    // mismatched format that would disagree with the backend trade window.
+    state.format = rulesFor(state.season).format;
     state.rules = { ...rulesFor(state.season, state.format) };
     state.config = normaliseConfig(state.format, state.config || {}, state.season);
     if (!Array.isArray(state.eventLog)) state.eventLog = [];

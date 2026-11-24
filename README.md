@@ -116,7 +116,8 @@ each team and in the final review. Mega auctions have no overseas salary ceiling
 ### League Control Board trading protocol
 
 The **Trade Desk** tab follows the four-step LCB approval protocol. The active window is derived from the
-authoritative phase — a caller-supplied `window` is ignored.
+authoritative phase — a caller-supplied `window` is ignored. The EOI form stays visible with disabled controls outside
+an open window, so it is clear when trading opens again.
 
 - **Post-season** (`POST_SEASON`): Mini `SETUP` after the season, closing one week before the auction. No
   trading is allowed immediately before a Mega Auction.
@@ -150,7 +151,8 @@ season; banned players cannot be included in a trade. Every ruling is retained i
 ### Injuries and withdrawals
 
 - A certified injury lets a franchise sign a replacement from the Reserve Player Pool (RPP)
-  within the injured player's salary, without debiting the purse.
+  within the injured player's salary, without debiting the purse. The Trade Desk exposes the injury, RPP signing
+  and withdrawal actions directly.
 - An uncertified pre-season withdrawal removes the player and applies a ban for up to two seasons.
 
 ## Tests
