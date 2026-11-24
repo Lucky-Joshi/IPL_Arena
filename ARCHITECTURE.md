@@ -187,9 +187,12 @@ still debits the full bid but diverts the excess to `state.welfareFund`.
 
 ### Retentions (`backend/src/retention.js`)
 
-A player may only be retained by the franchise that held their previous-season contract
-(`previousFranchiseId === franchise.id` and `retentionCandidate === true`). Released contracts enter the
-shared auction pool. `SET_RETENTIONS` validates a whole selection against a reset clone; AI franchises use
+Each franchise starts SETUP with a distinct 15-player `previousSquad` from the 150 `R###` candidates
+(non-overlapping across all ten teams). A player may only be retained by the franchise that holds their
+previous-season contract (`previousFranchiseId === franchise.id` and `retentionCandidate === true`). Released
+contracts enter the shared auction pool. Pre-retention trades move contracts between `previousSquad` lists and
+update `previousFranchiseId`, so CLAW/retention eligibility follows the new owner. `SET_RETENTIONS` validates a
+whole selection against a reset clone; AI franchises use
 `autoRetainAi`, which applies each **complete ordered plan at once** so capped slabs and CLAW cards are
 correct. `START` confirms an empty selection if the user has not picked one.
 
@@ -221,10 +224,13 @@ price, log, ticks }`.
 ### LCB trading (`backend/src/season-ops.js`, `backend/src/trade-ai.js`)
 
 `activeTradeWindow(state)` is the only source of truth for the open window; a `window` value in an action
-body is ignored. `SETUP` is `POST_SEASON` for Mini seasons only (never before a Mega); `FINAL_REVIEW` and
-`COMPLETED` are `POST_AUCTION`. There is no window on the live auction floor. `canTradePlayer` rejects
-players who are not contracted (`availability !== 'SOLD'`), have withheld consent, are serving a ban, or
-were bought at the mini auction during `POST_AUCTION`.
+body is ignored. `SETUP` is `POST_SEASON` for **every** season, before retentions are finalized; `FINAL_REVIEW`
+and `COMPLETED` are `POST_AUCTION`. There is no window on the live auction floor. In `POST_SEASON`,
+`canTradePlayer` accepts previous-season contracts from `previousSquad` while they remain `AVAILABLE` and
+unsold; un-retained contracts stay in the auction pool. Active contracts still require `squad` membership and
+`availability === 'SOLD'`. Withheld consent, LCB bans and the mini-signing freeze in `POST_AUCTION` remain
+absolute. Salary ceilings are checked when retentions are submitted and after the auction; pre-retention
+trades still face squad-size, overseas-slot and purse vetting.
 
 The four-step approval protocol:
 
@@ -426,9 +432,10 @@ Setup offers the 2025/2026/2027 season picker with the LCB rules board, then a r
 that franchise's own previous-season contracts (Mini picks honour the ₹18 Cr overseas ceiling). The review
 step shows capped/uncapped counts, slab costs, CLAW cards and every rival's plan. `BidPanel` exposes live CLAW
 controls (`USE_CLAW`, `PASS_CLAW`, `CLAW_RAISE`, `CLAW_DECLINE`, `MATCH_CLAW`) when the human franchise is on the
-clock. `TradeDesk` files BUY/SELL/SWAP EOIs, shows the derived exact cash and transfer-fee split, exposes
-accept/reject, consent/veto, amendment and deadline timelines for every EOI, offers `RUN_AI_TRADES` scouting
-and lists integrity rulings. `SquadManager` marks trade acquisitions `TRADED IN` and filters by source.
+clock. `TradeDesk` files BUY/SELL/SWAP EOIs (including pre-retention previous contracts in every SETUP), shows the
+derived exact cash and transfer-fee split, exposes accept/reject, consent/veto, amendment and deadline
+timelines for every EOI, offers `RUN_AI_TRADES` scouting, manages RPP injuries/replacements/withdrawals and
+lists integrity rulings. `SquadManager` marks trade acquisitions `TRADED IN` and filters by source.
 `ResultsView` reports the salary cap, overseas salary/welfare split, CLAW usage, LCB trade revenue, detailed
 trade ledger, tampering cases and injury/withdrawal entries.
 

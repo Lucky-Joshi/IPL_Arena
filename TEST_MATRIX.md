@@ -47,7 +47,7 @@ tests, backend end-to-end smoke tests, Next.js production build.
 | 39 | CLAW bid history entries are settlement records | smoke-test invariant skip of `CLAW*` bid sources |
 | 40 | Overseas bid above ₹18 Cr splits salary/welfare | smoke-test — ₹25 Cr → ₹18 Cr salary, ₹7 Cr welfare, full purse debit |
 | 41 | Match-fee projection ₹12.6 Cr | smoke-test `matchFeeProjection('2025')` assertion |
-| 42 | Trade windows derive from phase, not request body | smoke-test — live auction rejected, pre-Mega rejected, Mini `SETUP` = `POST_SEASON`, `COMPLETED` = `POST_AUCTION` |
+| 42 | Trade windows derive from phase, not request body | smoke-test — live auction rejected, Mega and Mini `SETUP` = `POST_SEASON`, `COMPLETED` = `POST_AUCTION` |
 | 43 | Four-step LCB approval and audit trail | smoke-test — `PROPOSE_TRADE` → `PENDING_48H`/`EOI_SUBMITTED`, `RESPOND_TRADE` → `AWAITING_CONSENT`, consent → `LCB_REVIEW` → `APPROVED`/`LCB_APPROVED`, `timeline[]` populated |
 | 44 | `ALL_CASH` settles exact fixed league fees | smoke-test — derived `cash`, ±`tradeCashDelta`, buyer/seller purse and `previousFranchiseId`, no purse impact from transfer fee |
 | 45 | `PLAYER_SWAP` / `CASH_PLUS_PLAYER` classification | smoke-test — multi-player equal-fee swap moves no cash; unequal fees derive the exact difference and reject a mismatched `cash` |
@@ -93,9 +93,10 @@ persistence/break scenarios and smoke invariants.
 11. Reload mid-bidding war; use Resume to confirm state restored.
 12. For a **2026 Mini**, retain contracts within the ₹18 Cr overseas ceiling; try an over-cap selection and
     confirm the rules engine rejects it with the overseas-cap message.
-13. Open the **Trade Desk**. In Mini `SETUP`, file a BUY EOI with an optional transfer fee; verify the deal
-    summary shows the exact derived league fee, the 50% LCB cut and the player/seller split. Confirm a
-    mismatched cash value is rejected.
+13. Open the **Trade Desk** in `SETUP` before retentions (Mega or Mini) and file a BUY EOI for another
+    franchise's previous-season contract with an optional transfer fee; verify the deal summary shows the
+    exact derived league fee, the 50% LCB cut and the player/seller split. Confirm a mismatched cash value is
+    rejected and that the traded player appears in your retention picker after approval.
 14. Accept/reject an incoming EOI for F1, then grant consent in the inbox and confirm the approved trade
     appears in the ledger with its timeline and deadline chips. Repeat with a veto and verify no player moves.
 15. Use `RUN_AI_TRADES` with a 1–4 limit and confirm rival EOIs are filed only in the open window; verify

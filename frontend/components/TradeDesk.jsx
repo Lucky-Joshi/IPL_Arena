@@ -29,9 +29,13 @@ function statusTone(status) {
   return 'pending';
 }
 
-/** Chip-based picker over one franchise's tradeable squad members. */
+/** Chip-based picker over one franchise's tradeable contract roster. */
 function PlayerPicker({ state, franchise, window, selected, onChange, excludeIds = [], label, disabled = false }) {
-  const options = (franchise?.squad || [])
+  // In SETUP, previous-season contracts are tradeable before retentions.
+  const roster = state?.phase === 'SETUP'
+    ? [...new Set([...(franchise?.previousSquad || []), ...(franchise?.squad || [])])]
+    : (franchise?.squad || []);
+  const options = roster
     .map((id) => playerById(state, id))
     .filter((player) => player
       && !selected.includes(player.id)
@@ -462,7 +466,7 @@ export default function TradeDesk({ state, onAction, busy }) {
         </div>
         {!windowInfo.open && (
           <p className="balance-note">
-            This form is shown for reference. It opens in a Mini post-season window (before START) or after the auction completes.
+            This form is shown for reference. It opens in the post-season window (before START) or after the auction completes.
           </p>
         )}
         <div className="trade-form">

@@ -36,9 +36,21 @@ function isOverseas(player) {
   return Boolean(player && player.nationality && player.nationality !== 'India');
 }
 
+/**
+ * Mirrors season-ops: in SETUP the tradeable roster is previousSquad plus any
+ * retained squad entries. Un-retained contracts stay AVAILABLE for the auction.
+ */
+function contractIds(state, franchise) {
+  const ids = new Set(franchise?.squad || []);
+  if (state.phase === 'SETUP') {
+    for (const id of franchise?.previousSquad || []) ids.add(id);
+  }
+  return ids;
+}
+
 function roleCounts(state, franchise) {
   const counts = { BATTER: 0, BOWLER: 0, ALLROUNDER: 0, WICKETKEEPER: 0 };
-  for (const id of franchise?.squad || []) {
+  for (const id of contractIds(state, franchise)) {
     const player = playerOf(state, id);
     if (player && Object.hasOwn(counts, player.role)) counts[player.role] += 1;
   }
@@ -174,10 +186,17 @@ export function suggestAiTrades(state, limit = 2) {
   const claimed = new Set();
 
   const tradeable = (player, owner) => {
-    if (!player || player.availability !== 'SOLD') return false;
+    if (!player || !contractIds(state, owner).has(player.id)) return false;
+    const previous = state.phase === 'SETUP'
+      && player.retentionCandidate === true
+      && player.previousFranchiseId === owner.id
+      && (owner.previousSquad || []).includes(player.id)
+      && player.availability === 'AVAILABLE'
+      && !player.retained
+      && !player.soldTo;
+    if (!previous && player.availability !== 'SOLD') return false;
     if (player.consentWithheld) return false;
     if (window === 'POST_AUCTION' && player.purchasedInMini === true) return false;
-    if (!(owner.squad || []).includes(player.id)) return false;
     return true;
   };
 
@@ -193,7 +212,7 @@ export function suggestAiTrades(state, limit = 2) {
     const list = [];
     for (const other of state.franchises || []) {
       if (other.id === franchise.id) continue;
-      for (const id of other.squad || []) {
+      for (const id of contractIds(state, other)) {
         const player = playerOf(state, id);
         if (!player || !roles.includes(player.role) || claimed.has(id)) continue;
         if (!tradeable(player, other)) continue;
@@ -221,7 +240,7 @@ export function suggestAiTrades(state, limit = 2) {
     for (const candidate of candidatesFor(franchise, roles)) {
       const { player: target, owner } = candidate;
       const ownerCounts = roleCounts(state, owner);
-      const surplus = (franchise.squad || [])
+      const surplus = [...contractIds(state, franchise)]
         .map((id) => playerOf(state, id))
         .filter((p) => p && tradeable(p, franchise) && p.id !== target.id)
         .filter((p) => counts[p.role] > benchmark[p.role] || (owner.targets || []).includes(p.role))
@@ -258,7 +277,7 @@ export function suggestAiTrades(state, limit = 2) {
     // moves no money, so it needs no purse from either franchise.
     for (const candidate of candidatesFor(franchise, ROLES)) {
       const { player: target, owner } = candidate;
-      const give = (franchise.squad || [])
+      const give = [...contractIds(state, franchise)]
         .map((id) => playerOf(state, id))
         .find((p) => p && tradeable(p, franchise) && p.id !== target.id
           && Math.abs(salaryOf(state, p.id) - salaryOf(state, target.id)) < 1e-9);

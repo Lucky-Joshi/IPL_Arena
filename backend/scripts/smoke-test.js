@@ -324,6 +324,26 @@ function miniRetentionPicks(state, franchiseId, count = 10) {
   return picks;
 }
 
+/** All ten franchises must own distinct, non-overlapping prior contracts. */
+function assertUniquePreviousSquads(state) {
+  const seen = new Set();
+  assert.equal(state.franchises.length, 10);
+  for (const franchise of state.franchises) {
+    const squad = franchise.previousSquad || [];
+    assert.equal(squad.length, 15, `${franchise.id} should start with 15 previous contracts`);
+    assert.equal(new Set(squad).size, squad.length, `${franchise.id} has duplicate previous contracts`);
+    for (const id of squad) {
+      assert.ok(!seen.has(id), `${id} appears in more than one previous-season squad`);
+      seen.add(id);
+      const player = state.players.find((candidate) => candidate.id === id);
+      assert.ok(player?.retentionCandidate, `${id} should be a retention candidate`);
+      assert.equal(player.previousFranchiseId, franchise.id, `${id} ownership must match its squad`);
+      assert.equal(player.availability, 'AVAILABLE', `${id} must stay an auction lot if unretained`);
+    }
+  }
+  assert.equal(seen.size, 150, 'ten franchises should own 150 distinct previous contracts');
+}
+
 async function scenarioCreateAndIntro() {
   const created = await act({
     action: 'CREATE', format: 'MEGA', difficulty: 'BALANCED', userFranchiseId: 'F1', config: CONFIG,
@@ -333,6 +353,7 @@ async function scenarioCreateAndIntro() {
   assert.equal(state.franchises.length, 10);
   assert.ok(state.players.length >= 140, `expected >=140 players, got ${state.players.length}`);
   assert.ok(state.franchises.every((f) => f.squad.length === 0), 'squads should start empty');
+  assertUniquePreviousSquads(state);
   assert.ok(state.franchises.every((f) => f.purse === state.config.startingPurse), 'initial purse should match config');
   const started = await act({ action: 'START' });
   assert.equal(started.ok, true, `START failed: ${started.error}`);
@@ -659,6 +680,7 @@ async function scenarioMiniAuction() {
   assert.equal(created.state.config.totalSalaryCap, 151);
   assert.equal(created.state.config.overseasSalaryCap, 18);
   assert.ok(created.state.franchises.every((f) => f.squad.length === 0), 'MINI squads should start empty');
+  assertUniquePreviousSquads(created.state);
   const picks = miniRetentionPicks(created.state, 'F1', 10).map((p) => p.id);
   assert.equal(picks.length, 10, 'F1 needs ten previous-season contracts');
   const configured = await act({ action: 'SET_RETENTIONS', playerIds: picks });
@@ -1306,13 +1328,53 @@ async function scenarioSalaryAndSeasonOps() {
   assert.equal(withheldCheck.ok, false, 'withheld player consent must block a trade');
   assert.match(withheldCheck.error || '', /consent/i);
 
+  // Mega SETUP is also a pre-retention window: previous contracts move between
+  // previous-season squads, stay AVAILABLE, and Clawback follows the new owner.
   const megaSetup = AuctionEngine.create({ season: '2025', format: 'MEGA', config: CONFIG, persist: () => {} });
-  const noWindow = megaSetup.dispatch({
-    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F2', givePlayerIds: ['P001'],
+  const megaStart = megaSetup.getState();
+  const megaContractId = megaStart.franchises.find((f) => f.id === 'F1').previousSquad[0];
+  const megaFee = Number(megaStart.players.find((p) => p.id === megaContractId).contractFee);
+  assert.ok(megaFee > 0, 'previous contracts carry an exact league fee');
+  const megaEoi = megaSetup.dispatch({
+    type: 'PROPOSE_TRADE', fromFranchiseId: 'F1', toFranchiseId: 'F2',
+    givePlayerIds: [megaContractId], autoRespond: false,
   });
-  assert.equal(noWindow.ok, false, 'no trading is allowed immediately before a Mega Auction');
-  assert.match(noWindow.error || '', /Mega/i);
-  pass('trades: withheld consent blocked / no trade before a Mega Auction');
+  assert.equal(megaEoi.ok, true, `Mega pre-retention EOI failed: ${megaEoi.error}`);
+  assert.equal(megaEoi.trade.window, 'POST_SEASON');
+  let megaAfter = megaSetup.getState();
+  assert.equal(megaAfter.franchises.find((f) => f.id === 'F1').purse, 120, 'an EOI must not move cash');
+  assert.ok(megaAfter.franchises.find((f) => f.id === 'F1').previousSquad.includes(megaContractId), 'an EOI must not move the player');
+  assert.ok(!megaAfter.franchises.find((f) => f.id === 'F2').previousSquad.includes(megaContractId));
+  assert.ok(megaAfter.franchises.every((f) => f.squad.length === 0), 'pre-retention trades must not fill active squads');
+  const megaAccept = megaSetup.dispatch({
+    type: 'RESPOND_TRADE', tradeId: megaEoi.trade.id, accept: true, source: 'AI',
+  });
+  assert.equal(megaAccept.ok, true, `Mega RESPOND_TRADE failed: ${megaAccept.error}`);
+  const megaConsent = megaSetup.dispatch({
+    type: 'PLAYER_TRADE_CONSENT', tradeId: megaEoi.trade.id, playerId: megaContractId, consent: true,
+  });
+  assert.equal(megaConsent.ok, true, `Mega PLAYER_TRADE_CONSENT failed: ${megaConsent.error}`);
+  assert.equal(megaConsent.trade.status, 'APPROVED');
+  megaAfter = megaSetup.getState();
+  assert.ok(!megaAfter.franchises.find((f) => f.id === 'F1').previousSquad.includes(megaContractId));
+  assert.ok(megaAfter.franchises.find((f) => f.id === 'F2').previousSquad.includes(megaContractId));
+  assert.equal(megaAfter.players.find((p) => p.id === megaContractId).previousFranchiseId, 'F2');
+  assert.equal(megaAfter.players.find((p) => p.id === megaContractId).availability, 'AVAILABLE',
+    'an unretained contract must remain an auction lot');
+  assert.equal(megaAfter.franchises.find((f) => f.id === 'F1').purse, money(120 + megaFee));
+  assert.equal(megaAfter.franchises.find((f) => f.id === 'F2').purse, money(120 - megaFee));
+  const oldOwnerRetain = megaSetup.dispatch({ type: 'SET_RETENTIONS', playerIds: [megaContractId] });
+  assert.equal(oldOwnerRetain.ok, false, 'the seller can no longer retain a traded contract');
+  assert.match(oldOwnerRetain.error || '', /another franchise|contracted/i);
+  const buyerSnapshot = clone(megaAfter);
+  buyerSnapshot.userFranchiseId = 'F2';
+  const buyerEngine = new AuctionEngine(buyerSnapshot, { persist: () => {} });
+  const newOwnerRetain = buyerEngine.dispatch({ type: 'SET_RETENTIONS', playerIds: [megaContractId] });
+  assert.equal(newOwnerRetain.ok, true, `buyer retention failed: ${newOwnerRetain.error}`);
+  const megaAi = megaSetup.dispatch({ type: 'RUN_AI_TRADES', limit: 2 });
+  assert.equal(megaAi.ok, true, `Mega RUN_AI_TRADES failed: ${megaAi.error}`);
+  for (const rivalTrade of megaAi.trades) assert.equal(rivalTrade.window, 'POST_SEASON');
+  pass('trades: withheld consent blocked / Mega pre-retention trade + CLAW ownership follows the contract');
 
   // Deadlines are real time: they lapse on dispatch and on tick, even SETUP.
   const expiryEoi = setup.dispatch({

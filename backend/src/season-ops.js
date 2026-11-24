@@ -17,7 +17,7 @@
  * player / the rest to the selling franchise.
  */
 
-import { isMega, rulesFor } from './rules.js';
+import { rulesFor } from './rules.js';
 import { evaluateEoi, autoConsent } from './trade-ai.js';
 
 const RESPONSE_HOURS = 48;
@@ -45,7 +45,7 @@ export function tradeWindows() {
     {
       id: 'POST_SEASON',
       label: 'Post-season window',
-      detail: 'Opens after the season, closes one week before the auction. No trades immediately before a Mega Auction.',
+      detail: 'Opens in SETUP for Mega and Mini seasons. Previous-season contracts can be traded before retentions are finalized.',
     },
     {
       id: 'POST_AUCTION',
@@ -61,7 +61,9 @@ export function tradeWindows() {
  */
 export function activeTradeWindow(state) {
   if (!state) return null;
-  if (state.phase === 'SETUP') return isMega(state.season) ? null : 'POST_SEASON';
+  // Before retentions every season trades its previous contracts. The live
+  // auction floor remains closed to trading in all formats.
+  if (state.phase === 'SETUP') return 'POST_SEASON';
   if (state.phase === 'COMPLETED' || state.phase === 'FINAL_REVIEW') return 'POST_AUCTION';
   return null;
 }
@@ -95,12 +97,42 @@ function isBanned(state, player) {
   return Number.isFinite(through) && through >= Number(state.season);
 }
 
+/**
+ * Previous-season contracts stay AVAILABLE so un-retained players remain
+ * auction lots. During SETUP, `previousSquad` is the tradeable contract roster
+ * for both Mega and Mini seasons. Retained players stay in both lists, so the
+ * union below keeps one entry per player once retentions are submitted.
+ */
+function contractIds(state, franchise, window) {
+  const ids = new Set(franchise?.squad || []);
+  if (window === 'POST_SEASON' && state.phase === 'SETUP') {
+    for (const id of franchise?.previousSquad || []) ids.add(id);
+  }
+  return ids;
+}
+
+function isPreviousContract(state, franchise, player, window) {
+  return Boolean(player)
+    && window === 'POST_SEASON'
+    && state.phase === 'SETUP'
+    && player.retentionCandidate === true
+    && player.previousFranchiseId === franchise?.id
+    && (franchise?.previousSquad || []).includes(player.id)
+    && player.availability === 'AVAILABLE'
+    && !player.retained
+    && !player.soldTo;
+}
+
 /** Eligibility of one player to leave `franchise` in the given window. */
 function canTradePlayer(state, franchise, playerId, window) {
   const player = playerOf(state, playerId);
   if (!player) return `Player ${playerId} was not found`;
-  if (!(franchise.squad || []).includes(playerId)) return `${player.name} is not in ${franchise.name}'s squad`;
-  if (player.availability !== 'SOLD') return `${player.name} is not under an active contract`;
+  if (!contractIds(state, franchise, window).has(playerId)) {
+    return `${player.name} is not in ${franchise.name}'s squad`;
+  }
+  if (!isPreviousContract(state, franchise, player, window)) {
+    if (player.availability !== 'SOLD') return `${player.name} is not under an active contract`;
+  }
   if (player.consentWithheld) return `${player.name} has withheld written consent`;
   if (isBanned(state, player)) return `${player.name} is serving a LCB ban and cannot be traded`;
   if (window === 'POST_AUCTION' && player.purchasedInMini === true) {
@@ -133,9 +165,11 @@ function computeDeal(state, giveIds, getIds) {
 }
 
 /**
- * Validate the post-trade squads of both franchises simultaneously: size,
- * overseas slots, total salary cap, overseas salary cap (Mini) and purse.
- * Minimum squad is only enforced once the auction is complete.
+ * Validate the post-trade rosters of both franchises simultaneously: size,
+ * overseas slots, purse and (after retentions) the salary ceilings. Minimum
+ * squad is only enforced once the auction is complete; pre-retention
+ * contracts are provisional auction candidates, so salary caps are checked
+ * by retention validation instead.
  */
 function validateTradeSquads(state, giveIds, getIds, from, to, cashAdjustment, window) {
   const config = state.config || {};
@@ -146,8 +180,8 @@ function validateTradeSquads(state, giveIds, getIds, from, to, cashAdjustment, w
   const overseasCap = Number(config.overseasSalaryCap) || 0;
   const byId = new Map((state.players || []).map((player) => [player.id, player]));
 
-  const fromSquad = new Set(from.squad || []);
-  const toSquad = new Set(to.squad || []);
+  const fromSquad = contractIds(state, from, window);
+  const toSquad = contractIds(state, to, window);
   for (const id of giveIds) { fromSquad.delete(id); toSquad.add(id); }
   for (const id of getIds) { toSquad.delete(id); fromSquad.add(id); }
 
@@ -156,18 +190,22 @@ function validateTradeSquads(state, giveIds, getIds, from, to, cashAdjustment, w
     if (members.length > maxSquad) return `${franchise.name} would exceed the ${maxSquad}-player squad limit`;
     // Only a trade that actually shrinks an undersized squad is prohibited.
     // A 1-for-1 swap keeps the count and is allowed to rebuild a short squad.
-    const before = (franchise.squad || []).length;
+    const before = contractIds(state, franchise, window).size;
     if (window === 'POST_AUCTION' && members.length < before && members.length < minSquad) {
       return `${franchise.name} would drop below the ${minSquad}-player minimum squad`;
     }
     const overseas = members.filter(isOverseas);
     if (overseas.length > maxOverseas) return `${franchise.name} would exceed the ${maxOverseas}-overseas limit`;
-    const salary = members.reduce((sum, p) => sum + (Number(p.salary) || 0), 0);
-    if (totalCap > 0 && salary > totalCap + EPSILON) {
+    // Previous contracts are valued at their fixed league fee until retained.
+    const salary = members.reduce((sum, p) => sum + salaryOf(state, p.id), 0);
+    // Pre-retention rosters are provisional auction candidates, not final
+    // squads, so salary ceilings are enforced when retentions are submitted and
+    // after the auction. Squad size, overseas slots and cash still apply here.
+    if (window !== 'POST_SEASON' && totalCap > 0 && salary > totalCap + EPSILON) {
       return `${franchise.name} would breach the ₹${totalCap} Cr total salary cap`;
     }
-    if (overseasCap > 0) {
-      const overseasSalary = overseas.reduce((sum, p) => sum + (Number(p.salary) || 0), 0);
+    if (window !== 'POST_SEASON' && overseasCap > 0) {
+      const overseasSalary = overseas.reduce((sum, p) => sum + salaryOf(state, p.id), 0);
       if (overseasSalary > overseasCap + EPSILON) {
         return `${franchise.name} would breach the ₹${overseasCap} Cr overseas salary cap`;
       }
@@ -205,9 +243,6 @@ export function proposeTrade(state, body = {}) {
 
   const window = activeTradeWindow(state);
   if (!window) {
-    if (state.phase === 'SETUP' && isMega(state.season)) {
-      return fail('No trade is permitted immediately before a Mega Auction — finalize retentions instead');
-    }
     return fail('Trades are only allowed in an official LCB window outside the live auction');
   }
 
@@ -511,16 +546,28 @@ function movePlayer(state, playerId, seller, buyer, trade) {
   const player = playerOf(state, playerId);
   if (!player) return;
   const fee = salaryOf(state, playerId);
-  seller.squad = (seller.squad || []).filter((id) => id !== playerId);
-  if (!buyer.squad.includes(playerId)) buyer.squad.push(playerId);
-  player.soldTo = buyer.id;
+  // Pre-retention contracts move between previous-season squads and remain
+  // AVAILABLE/unsold: the new owner may retain them, and any that are left
+  // unretained still go into the auction as lots.
+  if (isPreviousContract(state, seller, player, trade.window)) {
+    seller.previousSquad = (seller.previousSquad || []).filter((id) => id !== playerId);
+    if (!Array.isArray(buyer.previousSquad)) buyer.previousSquad = [];
+    if (!buyer.previousSquad.includes(playerId)) buyer.previousSquad.push(playerId);
+    player.soldTo = null;
+  } else {
+    seller.squad = (seller.squad || []).filter((id) => id !== playerId);
+    if (!buyer.squad.includes(playerId)) buyer.squad.push(playerId);
+    player.soldTo = buyer.id;
+    // Overseas salary spend follows an active contract so bid validation stays
+    // legal. Previous contracts are not yet active spend.
+    if (isOverseas(player)) {
+      seller.overseasSalarySpend = roundMoney(Math.max(0, (Number(seller.overseasSalarySpend) || 0) - fee));
+      buyer.overseasSalarySpend = roundMoney((Number(buyer.overseasSalarySpend) || 0) + fee);
+    }
+  }
+  // Clawback/retention eligibility follows the contract's new owner.
   player.previousFranchiseId = buyer.id;
   player.traded = true;
-  // Overseas salary spend follows the player so later bid validation stays legal.
-  if (isOverseas(player)) {
-    seller.overseasSalarySpend = roundMoney(Math.max(0, (Number(seller.overseasSalarySpend) || 0) - fee));
-    buyer.overseasSalarySpend = roundMoney((Number(buyer.overseasSalarySpend) || 0) + fee);
-  }
   if (!Array.isArray(player.tradeHistory)) player.tradeHistory = [];
   player.tradeHistory.push({ tradeId: trade.id, from: seller.id, to: buyer.id, at: nowIso(), fee });
 

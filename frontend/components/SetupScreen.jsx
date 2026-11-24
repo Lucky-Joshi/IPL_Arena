@@ -95,7 +95,17 @@ export default function SetupScreen() {
       .then((snapshot) => {
         if (!active) return;
         setSaved(snapshot);
-        if (snapshot.state?.userFranchiseId) setSelectedId(snapshot.state.userFranchiseId);
+        const savedState = snapshot.state;
+        if (savedState?.userFranchiseId) setSelectedId(savedState.userFranchiseId);
+        // Returning from the Trade Desk must show the refreshed contract list:
+        // a pre-retention trade changes previousFranchiseId on the server.
+        if (savedState?.phase === 'SETUP') {
+          setCreated(savedState);
+          const mine = savedState.franchises?.find((entry) => entry.id === savedState.userFranchiseId);
+          const retained = (mine?.retentions || []).map((entry) => entry.playerId);
+          setSelectedRetentionIds(retained);
+          setRetentionStep(retained.length ? 'review' : 'pick');
+        }
       })
       .catch(() => {
         // Setup must remain usable when the backend is not running yet.
@@ -508,6 +518,10 @@ export default function SetupScreen() {
                   ) : (
                     <>Keep as many as you like at their existing contract fees. There is no Franchise Clawback in a Mini Auction.</>
                   )}
+                </p>
+                <p className="balance-note">
+                  Want to reshape the contract list first? <a href="/auction">Open the Trade Desk →</a> deals
+                  made here appear in this picker as soon as you return.
                 </p>
 
                 <div className="retention-meter">

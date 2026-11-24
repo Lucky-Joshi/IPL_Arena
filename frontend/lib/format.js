@@ -221,19 +221,13 @@ export function tradeApprovalLabel(approval) {
 
 /**
  * Mirrors backend activeTradeWindow(): the open window is derived from the
- * season phase, never from a client-supplied value. No trades before a Mega
- * Auction; the live auction floor is always closed to trading. The season is
- * authoritative, so a stale `format` in an old save cannot disagree with it.
+ * season phase, never from a client-supplied value. Every season trades its
+ * previous contracts in SETUP, before retentions are finalized; the live
+ * auction floor is always closed to trading.
  */
-function auctionFormat(state) {
-  const fromRules = String(state?.rules?.format || '').toUpperCase();
-  if (fromRules === 'MEGA' || fromRules === 'MINI') return fromRules;
-  return seasonOption(state).format;
-}
-
 export function activeTradeWindow(state) {
   if (!state) return null;
-  if (state.phase === 'SETUP') return auctionFormat(state) === 'MEGA' ? null : 'POST_SEASON';
+  if (state.phase === 'SETUP') return 'POST_SEASON';
   if (state.phase === 'COMPLETED' || state.phase === 'FINAL_REVIEW') return 'POST_AUCTION';
   return null;
 }
@@ -245,7 +239,7 @@ export function tradeWindowInfo(state) {
       open: true,
       window,
       label: 'Post-season window open',
-      detail: 'Trades close one week before the auction. Retained contracts move at their exact league fee.',
+      detail: 'Trades close one week before the auction. Previous-season contracts move at their exact league fee, before retentions are set.',
     };
   }
   if (window === 'POST_AUCTION') {
@@ -254,14 +248,6 @@ export function tradeWindowInfo(state) {
       window,
       label: 'Post-auction window open',
       detail: 'Closes 30 days before the tournament. Mini-auction signings are frozen until they have played a season.',
-    };
-  }
-  if (state?.phase === 'SETUP' && auctionFormat(state) === 'MEGA') {
-    return {
-      open: false,
-      window: null,
-      label: 'Trade window closed',
-      detail: 'No trades are permitted immediately before a Mega Auction — finalize your retentions instead.',
     };
   }
   return {
@@ -284,8 +270,17 @@ export function tradeSalary(state, playerId) {
 /** UI mirror of the backend eligibility check, used to grey-out options. */
 export function tradeBlockReason(state, franchise, player, window) {
   if (!player) return 'Unknown player';
-  if (!(franchise?.squad || []).includes(player.id)) return 'Not in this squad';
-  if (player.availability !== 'SOLD') return 'Not under an active contract';
+  const previous = state?.phase === 'SETUP'
+    && player.retentionCandidate === true
+    && player.previousFranchiseId === franchise?.id
+    && (franchise?.previousSquad || []).includes(player.id)
+    && player.availability === 'AVAILABLE'
+    && !player.retained
+    && !player.soldTo;
+  if (!previous) {
+    if (!(franchise?.squad || []).includes(player.id)) return 'Not in this squad';
+    if (player.availability !== 'SOLD') return 'Not under an active contract';
+  }
   if (player.consentWithheld) return 'Consent withheld';
   const banThrough = Number(player.banUntilSeason);
   if (Number.isFinite(banThrough) && banThrough >= Number(state?.season)) return 'Serving an LCB ban';

@@ -119,8 +119,9 @@ The **Trade Desk** tab follows the four-step LCB approval protocol. The active w
 authoritative phase — a caller-supplied `window` is ignored. The EOI form stays visible with disabled controls outside
 an open window, so it is clear when trading opens again.
 
-- **Post-season** (`POST_SEASON`): Mini `SETUP` after the season, closing one week before the auction. No
-  trading is allowed immediately before a Mega Auction.
+- **Post-season** (`POST_SEASON`): `SETUP` in **every** season, before retentions are finalized. Each franchise
+  trades its distinct previous-season contracts; un-retained players stay available for the auction. Clawback
+  eligibility follows the contract to its new owner.
 - **Post-auction** (`POST_AUCTION`): `FINAL_REVIEW`/`COMPLETED`, closing 30 days before the tournament.
   Players bought at the mini auction are frozen until they have played a season.
 
