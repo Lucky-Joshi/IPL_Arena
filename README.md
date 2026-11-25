@@ -33,6 +33,13 @@ and every player are invented for this game; the product is not affiliated with 
 Before commercial release, clear the **T20 Dynasty** name against IP India trademark records, check domain
 availability and app-store names, and have a trademark professional review the final identity.
 
+## Licence
+
+T20 Dynasty is proprietary software. See [LICENSE](LICENSE) for the full terms: all rights are
+reserved, and no person or entity may use, copy, modify, distribute or deploy this project without
+prior written permission from the copyright holder. This project is **not** released under MIT or any
+other open-source licence. See [CHANGELOG.md](CHANGELOG.md) for the project history.
+
 ## Run
 
 **Windows:** double-click `run-all.cmd` (three terminal windows open), then visit

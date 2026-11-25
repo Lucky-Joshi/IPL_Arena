@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "Premium T20 franchise auction simulator frontend",
+  "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
